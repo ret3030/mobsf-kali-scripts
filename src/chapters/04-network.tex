@@ -1,0 +1,62 @@
+\chapter{Network and API Testing}\label{ch:network}
+\chapterinfo{On-device, backend (in scope only)}{\mtop{M5} \mtop{M3}; \masvs{NETWORK} \masvs{AUTH}}
+
+The app is a client to a backend, and most high-impact findings live at that boundary: transport weaknesses, session and token handling, and server-side authorization gaps. Everything in this chapter that touches the server stays inside the endpoints the SOW names.
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Intercept all traffic and verify transport security (\mtop{M5}).
+\item Assess certificate pinning, and document it before bypassing on your own device.
+\item Test session, token, authentication, and logout handling (\mtop{M3}).
+\item Test server-side authorization: IDOR/BOLA and privilege boundaries (\mtop{M3}).
+\end{itemize}
+\end{objectives}
+
+\section{Interception}
+Route the device through Burp or mitmproxy with your CA in the system store (Chapter~\ref{ch:setup}).
+
+\begin{lstlisting}
+# writable-system emulator: install the proxy CA as a system cert
+openssl x509 -inform PEM -subject_hash_old -in cacert.pem | head -1   # -> HASH
+adb root && adb remount
+adb push cacert.pem /system/etc/security/cacerts/<HASH>.0
+adb shell chmod 644 /system/etc/security/cacerts/<HASH>.0 && adb reboot
+# then set the device Wi-Fi proxy to your Kali host:8080
+\end{lstlisting}
+
+\begin{findingbox}
+Sensitive data in transit without strong transport protection, or a plaintext fallback. (\mtop{M5}, \masvs{NETWORK-1})
+\end{findingbox}
+Confirm TLS everywhere, no cleartext endpoints, a modern TLS version and cipher suites, and no sensitive data carried in URL query strings (which land in logs and history).
+
+\section{Certificate pinning}
+Document whether pinning is present and how it is enforced (network security config, OkHttp \cmd{CertificatePinner}, TrustManager, or native). If you must defeat pinning to see the traffic, do it on your controlled device with a runtime unpinning script, and treat it as an observation: pinning is a positive control, and the finding, if any, is about what the traffic then reveals, not that pinning existed.
+
+\begin{trap}
+No traffic in the proxy does not prove strong pinning. Rule out the ordinary causes first: CA in the user store rather than the system store, a proxy-aware vs proxy-unaware network stack, or certificate transparency enforcement. Conclude pinning only after those are excluded.
+\end{trap}
+
+\section{Authentication and session handling (\mtop{M3})}
+\begin{findingbox}
+A session or token an attacker can steal, reuse, or outlive its intended life. (\masvs{AUTH-1}, \masvs{AUTH-2})
+\end{findingbox}
+Examine the token type and format, where it is stored (cross-reference Chapter~\ref{ch:storage}), its lifetime and refresh logic, and whether logout actually invalidates it server-side. Flag tokens in URLs or logs, long-lived tokens with no rotation, and refresh flows that never expire. For OAuth, check the redirect handling and that PKCE is used.
+
+\section{Server-side authorization (\mtop{M3})}
+\begin{findingbox}
+The server trusts the client for a decision it must make itself. (\masvs{AUTH-3})
+\end{findingbox}
+Within the in-scope endpoints, test for broken object-level authorization (IDOR/BOLA): change an object identifier in a request and see whether you receive another user's data. Test horizontal and vertical privilege boundaries, mass-assignment of fields the client should not set, and whether sensitive operations carry a server-verified nonce or signature against replay. Check for verbose error responses and missing rate limiting on authentication endpoints.
+
+\begin{trap}
+Client-side authorization is not a control. A menu hidden in the app, a disabled button, or a role checked only on the device means nothing if the server honours the request anyway. Prove authorization at the API, not in the UI.
+\end{trap}
+
+\begin{summarybox}
+\begin{itemize}
+\item Intercept with a system-store CA; verify TLS everywhere and no cleartext or query-string secrets.
+\item Document pinning before bypassing; the bypass is an observation on your own device.
+\item Test token lifetime, storage, and whether logout invalidates server-side.
+\item Prove authorization at the API: IDOR/BOLA and privilege boundaries, never trusting the UI.
+\end{itemize}
+\end{summarybox}

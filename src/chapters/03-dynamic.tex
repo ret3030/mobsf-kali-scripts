@@ -1,0 +1,72 @@
+\chapter{Dynamic and Runtime Analysis}\label{ch:dynamic}
+\chapterinfo{On-device, runtime}{\mtop{M1} \mtop{M6} \mtop{M7}; \masvs{PLATFORM} \masvs{RESILIENCE}}
+
+Dynamic analysis confirms what static review suspected and finds what the code alone could not show: how the app behaves with live data, what it leaks at runtime, and how its IPC surface answers to other apps. Instrumentation here is for observation. Use it to demonstrate a defect, not to permanently alter the app.
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Observe runtime behaviour and log output while driving the app (\mtop{M6}).
+\item Exercise exported components, content providers, and deep links for access-control gaps (\mtop{M4} overlap).
+\item Use Frida and objection to inspect crypto, memory, and Keystore use at runtime (\mtop{M1}).
+\item Assess root, debugger, and emulator detection, and record bypass feasibility (\mtop{M7}).
+\end{itemize}
+\end{objectives}
+
+\section{Driving the app under observation}
+Install on the instrumented device, exercise every feature, and watch the logs:
+
+\begin{lstlisting}
+adb install -r app.apk
+adb logcat --pid=$(adb shell pidof -s <package>)
+\end{lstlisting}
+
+\begin{findingbox}
+Sensitive data (tokens, PII, full requests) written to a log readable on-device. (\mtop{M6}, \masvs{STORAGE-1})
+\end{findingbox}
+Confirm the logging leaks you flagged statically, and watch for stack traces that disclose internals.
+
+\section{Exported component surface}
+\begin{findingbox}
+An exported component that performs a privileged action or returns data to an unauthorised caller. (\masvs{PLATFORM-1})
+\end{findingbox}
+
+Interact directly with the components you flagged in the manifest. Observe only: trigger the behaviour to show the gap, do not weaponise it.
+
+\begin{lstlisting}
+adb shell am start -n <package>/<activity> --es key value   # activity
+adb shell am startservice -n <package>/<service>            # service
+adb shell am broadcast -a <action> --es key value           # receiver
+# exported content provider:
+adb shell content query --uri content://<authority>/<path>
+\end{lstlisting}
+
+Test content providers for unauthorised read and write, path traversal in the provider path, and misuse of \cmd{grantUriPermission}. Fuzz deep links and custom URI schemes to test input handling and access control on the activities they open.
+
+\section{Runtime instrumentation}
+Start the Frida server on the device (matching your \cmd{frida-tools} version), then attach:
+
+\begin{lstlisting}
+frida-ps -U                                   # confirm server, list processes
+objection -g <package> explore                # interactive runtime toolkit
+\end{lstlisting}
+
+With objection and Frida you can, on your controlled device, observe cryptographic calls and the keys and IVs passed to them, read values held in memory, enumerate Keystore usage, and list loaded classes. Use this to evidence a static finding (for example, that a key flagged as hardcoded is the one actually used), and to check whether sensitive material lingers in memory after the operation that needed it.
+
+\begin{trap}
+Keep instrumentation observational. Hooking a method to watch its arguments is evidence; permanently patching the app to remove a check is modifying the target, which this engagement does not do. If you bypass a control to continue testing, note that you did and restore a clean install afterward.
+\end{trap}
+
+\section{Resilience controls (\mtop{M7})}
+\begin{findingbox}
+A client-side control that is the app's only line of defence and can be bypassed. (\masvs{RESILIENCE})
+\end{findingbox}
+Record whether root, debugger, and emulator detection exist and how robust they are. Two points for the report: first, resilience controls are defence in depth, not a substitute for server-side checks, so a bypassable control matters most when it guards something the server does not re-verify; second, the bypass is an observation that calibrates the strength of the control, never the goal of the test. State the feasibility and move on.
+
+\begin{summarybox}
+\begin{itemize}
+\item Confirm static leaks at runtime with \cmd{logcat} while driving every feature.
+\item Exercise exported components and providers to observe access-control gaps; do not weaponise.
+\item Use Frida and objection to evidence crypto and memory findings on your controlled device.
+\item Report resilience-control bypass feasibility as an observation, weighted by what the server fails to re-check.
+\end{itemize}
+\end{summarybox}

@@ -1,0 +1,115 @@
+\chapter{Static Analysis: Manifest, Code, and Dependencies}\label{ch:static}
+\chapterinfo{Static review}{\mtop{M1} \mtop{M2} \mtop{M4} \mtop{M5} \mtop{M7} \mtop{M8} \mtop{M10}; \masvs{CODE} \masvs{CRYPTO} \masvs{PLATFORM}}
+
+White-box is won in static analysis. With the manifest, the decompiled code, and the real source side by side, you find configuration defects, hardcoded secrets, and weak crypto faster and with more certainty than any black-box pass. Decompile first, scan to triage, then read the code that matters.
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Audit the manifest for exported components and dangerous flags (\mtop{M8}).
+\item Find hardcoded secrets, keys, and endpoints in code, resources, and native libraries (\mtop{M1}).
+\item Review cryptography, WebView, and injection sinks in the source (\mtop{M10}, \mtop{M4}).
+\item Assess third-party libraries and native code for known vulnerabilities (\mtop{M2}).
+\item Check the network security config and binary-protection posture (\mtop{M5}, \mtop{M7}).
+\end{itemize}
+\end{objectives}
+
+\begin{lab}[decompile and triage]
+\begin{lstlisting}
+apktool d -f -o decoded/ app.apk        # manifest, resources, smali
+jadx -d jadx/ app.apk                    # decompiled Java
+aapt dump badging app.apk                # package, versions, SDK
+# triage scans:
+semgrep --config p/mobile --config p/secrets jadx/sources
+rg -niE '(api[_-]?key|secret|password|token|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN)' jadx/sources
+\end{lstlisting}
+Let MobSF run in parallel as a baseline, but confirm every hit by hand against the real source. Scanner output is a lead, not a finding.
+\end{lab}
+
+\section{Manifest and configuration}
+\begin{findingbox}
+A component reachable by another app that should be private, or a build flag that exposes the app's data or internals. (\mtop{M8}, \masvs{PLATFORM-1})
+\end{findingbox}
+
+Read \cmd{decoded/AndroidManifest.xml} in full. The high-value checks:
+
+\begin{itemize}
+\item \textbf{Exported components.} Every \cmd{activity}, \cmd{service}, \cmd{receiver}, and \cmd{provider} with \cmd{android:exported="true"} (or an intent filter, which implies exported) is reachable by other apps. For each, ask whether that is intended and whether it enforces a permission. Since API 31, \cmd{exported} must be set explicitly, so an omission is itself worth noting on older targets.
+\item \textbf{Debuggable.} \cmd{android:debuggable="true"} in a release build lets any local process attach a debugger and read memory. Always a finding.
+\item \textbf{Backups.} \cmd{android:allowBackup="true"} (the historical default) with no restrictive \cmd{dataExtractionRules} or \cmd{fullBackupContent} allows \cmd{adb backup} extraction of app data. Confirm by testing (Chapter~\ref{ch:storage}).
+\item \textbf{Cleartext.} \cmd{android:usesCleartextTraffic="true"} permits plaintext HTTP. Cross-check the network security config below.
+\item \textbf{minSdkVersion.} A low floor re-exposes platform vulnerabilities patched in later releases, and weakens the trust-store and backup defaults you can rely on.
+\item \textbf{Permissions.} Compare requested permissions against actual features. Flag over-permissioning and any custom permission with \cmd{normal} or \cmd{dangerous} protection level that guards a sensitive component and should be \cmd{signature}.
+\item \textbf{Deep links and task handling.} \cmd{intent-filter} entries with \cmd{autoVerify}, unverified web links, and \cmd{launchMode}/\cmd{taskAffinity} values that enable task hijacking (the StrandHogg class).
+\end{itemize}
+
+\subsection{Network security config}
+Locate \cmd{res/xml/network\_security\_config.xml} (referenced from the manifest's \cmd{networkSecurityConfig} attribute). Flag: cleartext permitted per-domain, overly broad \cmd{trust-anchors}, a \cmd{debug-overrides} block shipped in a release, and whether pinning is declared here at all. (\mtop{M5}, \masvs{NETWORK-1})
+
+\section{Secrets and hardcoded material}
+\begin{findingbox}
+A credential, key, or hidden endpoint an attacker can read straight from the shipped app. (\mtop{M1}, \masvs{STORAGE-2})
+\end{findingbox}
+
+Grep the decompiled code, every resource file, \cmd{assets/}, \cmd{res/raw/}, \cmd{BuildConfig}, and native libraries. Look for:
+
+\begin{itemize}
+\item API keys, cloud credentials (AWS \cmd{AKIA...}, Google \cmd{AIza...}), private keys (\cmd{-----BEGIN}), JWT signing secrets, and symmetric encryption keys.
+\item Backend URLs, admin or debug endpoints, feature flags, and test accounts.
+\item Firebase configuration pointing at a Realtime Database or Storage bucket: test whether the rules are open (a common high-impact finding reachable with only the config).
+\item Third-party SDK keys, and the scope of what each key grants.
+\end{itemize}
+
+\begin{trap}
+A string that looks like a secret may be a public identifier (a Google Maps browser key restricted by package signature, a Firebase \cmd{google\_api\_key} that is designed to be public). Verify impact before reporting: test whether the key actually grants access. Report the ones that do, and note the ones that do not so the client sees you checked.
+\end{trap}
+
+\section{Code-level review}
+This is the white-box advantage. Read the source for the sinks the scanners flag and the ones they miss.
+
+\subsection{Cryptography (\mtop{M10})}
+\begin{findingbox}
+Encryption or hashing that does not protect what it claims to. (\masvs{CRYPTO-1}, \masvs{CRYPTO-2})
+\end{findingbox}
+Flag ECB mode, a hardcoded IV, static or hardcoded keys, \cmd{Random} where \cmd{SecureRandom} is required, MD5 or SHA-1 used for integrity or password hashing, deprecated TLS versions, and any home-grown cipher. Check that keys protecting sensitive data live in the Android Keystore rather than being derived from a constant in the code.
+
+\subsection{WebView (\mtop{M4})}
+\begin{findingbox}
+A WebView that executes attacker-controlled content or exposes native capability to the page. (\masvs{PLATFORM-2})
+\end{findingbox}
+Flag \cmd{setJavaScriptEnabled(true)} combined with \cmd{addJavascriptInterface} (native methods callable from the page), \cmd{setAllowFileAccess} and \cmd{setAllowUniversalAccessFromFileURLs}, loading of untrusted or mixed content, and a missing or permissive \cmd{shouldOverrideUrlLoading}.
+
+\subsection{Injection and unsafe sinks (\mtop{M4})}
+Flag SQL built by string concatenation (injection into the local database), content provider \cmd{query} paths built from untrusted input, insecure deserialization, dynamic code loading (\cmd{DexClassLoader}, loading a DEX from external storage), and \cmd{Runtime.exec}. On the IPC surfaces you marked exported, trace how input is validated.
+
+\subsection{Logging and leakage (\mtop{M6} overlap)}
+Flag \cmd{Log.*} calls that write tokens, credentials, or PII, and stack traces that leak internal structure. Confirm at runtime in Chapter~\ref{ch:dynamic}.
+
+\subsection{Intents and PendingIntents}
+Flag mutable \cmd{PendingIntent}s (\cmd{FLAG\_MUTABLE} without good reason), implicit intents that carry sensitive extras, and broadcasts of sensitive data without a receiver permission.
+
+\section{Dependencies and supply chain (\mtop{M2})}
+\begin{findingbox}
+A bundled library or SDK with a known vulnerability, or native code of unknown provenance. (\masvs{CODE-3})
+\end{findingbox}
+
+The pinned versions in Gradle make this exact in a white-box test. Enumerate third-party libraries and their versions and check them against known CVEs: outdated networking stacks (OkHttp, Retrofit), WebView wrappers, and image or document parsers are the usual offenders. For native \cmd{.so} libraries, identify the library and version, check for known CVEs, and list exported JNI functions.
+
+\begin{lstlisting}
+find decoded/lib -name '*.so'            # native libraries by ABI
+strings -n 8 decoded/lib/arm64-v8a/*.so | grep -iE 'version|openssl|curl'
+\end{lstlisting}
+
+\section{Binary protections (\mtop{M7})}
+\begin{findingbox}
+The app ships without the hardening its risk profile calls for. (\masvs{RESILIENCE})
+\end{findingbox}
+Note whether the release is obfuscated, whether sensitive logic is protected, and whether root, debugger, emulator, and hook detection exist. For a general business app the absence of these is informational; for a payment, banking, or DRM app it is a finding in its own right. Treat the detail of bypassing any such control as runtime work in Chapter~\ref{ch:dynamic}, and record it as an observation, not as the objective.
+
+\begin{summarybox}
+\begin{itemize}
+\item Decompile, scan to triage, then read the real source for every lead.
+\item Exported components, \cmd{debuggable}, \cmd{allowBackup}, and the network security config are the fast, high-value manifest findings.
+\item Prove impact on secrets before reporting them; a public identifier is not a leak.
+\item Pinned dependency versions make CVE matching exact: use the advantage.
+\end{itemize}
+\end{summarybox}

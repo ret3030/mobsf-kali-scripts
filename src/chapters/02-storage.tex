@@ -1,0 +1,75 @@
+\chapter{Local Data Storage}\label{ch:storage}
+\chapterinfo{Static and on-device}{\mtop{M9} \mtop{M6}; \masvs{STORAGE-1} \masvs{STORAGE-2}}
+
+Insecure local storage is the most consistently present finding in mobile testing. Drive the app through its full feature set, then inspect everything it wrote. The question for each artifact is simple: is anything sensitive readable by another app, by physical access, or through a backup?
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Inspect preferences, databases, and files for cleartext secrets and PII (\mtop{M9}).
+\item Assess Keystore use and whether keys are actually hardware-backed.
+\item Test backup extraction and cache and temporary-file exposure.
+\item Check UI-surface leaks: screenshots, clipboard, and keyboard cache (\mtop{M6}).
+\end{itemize}
+\end{objectives}
+
+\section{The app data directory}
+Pull the private data directory from the rooted device after exercising the app, and inspect it:
+
+\begin{lstlisting}
+adb shell run-as <package> ls -la /data/data/<package>/
+adb exec-out run-as <package> tar c /data/data/<package> > appdata.tar
+# inspect: shared_prefs/*.xml, databases/*.db, files/, cache/
+sqlite3 databases/app.db .tables
+\end{lstlisting}
+
+\begin{findingbox}
+Tokens, credentials, or PII stored where they can be read without the user's secret. (\mtop{M9}, \masvs{STORAGE-1})
+\end{findingbox}
+
+\begin{itemize}
+\item \textbf{SharedPreferences} in cleartext XML holding tokens, session identifiers, or PII.
+\item \textbf{SQLite / Room} databases with sensitive columns unencrypted. If SQLCipher is used, check how the passphrase is derived and stored.
+\item \textbf{Files in internal storage}, and any sensitive write to external storage, which historically is world-readable and outside the app sandbox.
+\item \textbf{Cache}: WebView cache, HTTP response cache, and image caches that retain sensitive responses.
+\end{itemize}
+
+\section{Keystore and key handling}
+Confirm that keys protecting sensitive data are generated in and used from the Android Keystore, not derived from an app constant or stored alongside the data they protect. For high-value apps, check \cmd{setUserAuthenticationRequired} so key use is gated on biometric or device credential, and whether \cmd{StrongBox} (hardware security module) is requested where available. Encrypted preferences libraries (\cmd{EncryptedSharedPreferences}, Jetpack Security) are a good sign only if the master key is Keystore-backed; verify it.
+
+\section{Backup extraction}
+\begin{findingbox}
+App data extractable off-device by anyone with the unlocked phone or ADB access. (\mtop{M9}, \masvs{STORAGE-2})
+\end{findingbox}
+If \cmd{allowBackup} is true (Chapter~\ref{ch:static}), demonstrate the impact:
+
+\begin{lstlisting}
+adb backup -f backup.ab -noapk <package>
+# unpack the Android backup container and inspect its contents
+dd if=backup.ab bs=1 skip=24 | zlib-flate -uncompress | tar xvf -
+\end{lstlisting}
+
+If data comes out, that is the evidence. Note that newer devices restrict \cmd{adb backup}; where it is blocked, record that the control is effective and assess cloud and device-transfer backup rules instead.
+
+\section{UI-surface leakage (\mtop{M6})}
+\begin{findingbox}
+Sensitive data exposed through the platform's UI conveniences. (\masvs{STORAGE-1}, privacy)
+\end{findingbox}
+
+\begin{itemize}
+\item \textbf{Screenshots and task thumbnails.} Sensitive screens without \cmd{FLAG\_SECURE} are captured into the recents thumbnail and by screenshot tooling. Check login, payment, and data-display screens.
+\item \textbf{Clipboard.} Copying sensitive fields (card numbers, tokens) to a clipboard readable by other apps.
+\item \textbf{Keyboard cache.} Password and sensitive fields without \cmd{textNoSuggestions}/\cmd{textPassword} input types let the IME cache keystrokes.
+\end{itemize}
+
+\begin{trap}
+Clear app data and re-test the storage pass after a full logout. The telling defect is sensitive data that survives logout, or tokens that remain valid on disk after the session should have ended. A clean-slate run catches what an incremental one hides.
+\end{trap}
+
+\begin{summarybox}
+\begin{itemize}
+\item Exercise every feature first, then inspect the whole data directory, not just the obvious files.
+\item Keystore-backed keys are the bar; a key derived from a constant protects nothing.
+\item Demonstrate backup extraction when \cmd{allowBackup} is on; record the control as effective when it is blocked.
+\item Check \cmd{FLAG\_SECURE}, clipboard, and keyboard cache on sensitive screens.
+\end{itemize}
+\end{summarybox}

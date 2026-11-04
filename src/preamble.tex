@@ -1,0 +1,142 @@
+% Android Application Penetration Testing: shared preamble.
+% Visual style matches the SC-500 study guide: Cambria body, dark blue
+% headings, thin grey rules between sections, no page headers, plain lists.
+\documentclass[11pt,a4paper,oneside,openany]{book}
+\usepackage{fontspec}
+\usepackage[english]{babel}
+\usepackage[a4paper,top=2.54cm,bottom=2.54cm,inner=2.54cm,outer=2.54cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,array,tabularx,longtable,multirow}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[most]{tcolorbox}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,calc,backgrounds}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage[titles]{tocloft}
+\usepackage[nottoc]{tocbibind}
+\usepackage{caption}
+\usepackage{emptypage}
+\usepackage{fvextra}
+\usepackage{xurl}
+\usepackage[hidelinks,bookmarksnumbered,pdfusetitle]{hyperref}
+\usepackage{bookmark}
+
+% fonts/ holds Cambria and Aptos; tectonic runs in build/
+\setmainfont{Cambria.ttc}[Path=../fonts/,FontIndex=0,
+  BoldFont=Cambriab.ttf,ItalicFont=Cambriai.ttf,BoldItalicFont=Cambriaz.ttf,
+  BoldFeatures={FontIndex=0},ItalicFeatures={FontIndex=0},BoldItalicFeatures={FontIndex=0}]
+\setsansfont{Aptos}[Path=../fonts/,Extension=.ttf,UprightFont=Aptos,BoldFont=Aptos-Bold,
+  ItalicFont=Aptos-Italic,BoldItalicFont=Aptos-Bold-Italic,Scale=0.95]
+\setmonofont{texgyrecursor}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic,Scale=0.92]
+
+% ---------------------------------------------------------------- metadata
+\newcommand{\guidetitle}{Android Application Penetration Testing}
+\newcommand{\guidesubtitle}{A White-Box Field Guide and Kali Toolkit}
+\newcommand{\guideauthor}{Robert Plevač}
+\newcommand{\guideversion}{1.0}
+\newcommand{\guidedate}{November 2026}
+\newcommand{\guidecurrency}{4 November 2026}
+\hypersetup{pdftitle={\guidetitle: \guidesubtitle},pdfauthor={\guideauthor},
+  pdfsubject={Android application penetration testing methodology},
+  pdfkeywords={Android, penetration testing, OWASP MASVS, MASTG, Mobile Top 10, Frida, MobSF, Burp, Kali}}
+
+% ---------------------------------------------------------------- colours
+\definecolor{acc}{HTML}{0F4761}    % headings
+\definecolor{titlegrey}{HTML}{262626}
+\definecolor{subgrey}{HTML}{595959}
+\definecolor{warn}{HTML}{9A4A12}
+\definecolor{new}{HTML}{7A2E8C}
+\definecolor{ok}{HTML}{2E7D32}
+\definecolor{codebg}{HTML}{F4F4F4}
+
+% ---------------------------------------------------------------- layout
+\setlist{itemsep=2pt,topsep=3pt}
+\setlist[itemize,1]{label=\textbullet,leftmargin=2.2em}
+\setlist[itemize,2]{label={\ttfamily o},leftmargin=2.2em}
+\setlist[itemize,3]{label={\tiny$\blacksquare$},leftmargin=2.2em}
+\setlength{\parindent}{0pt}\setlength{\parskip}{5pt plus 1pt}
+\sloppy\emergencystretch=3em
+\captionsetup{font=small,labelfont=bf,labelsep=period}
+\setcounter{secnumdepth}{2}
+\setcounter{tocdepth}{1}
+
+\titleformat{\chapter}[hang]{\color{acc}\fontsize{20}{25}\selectfont}{\chaptertitlename\ \thechapter:}{0.35em}{}
+\titleformat{name=\chapter,numberless}[hang]{\color{acc}\fontsize{20}{25}\selectfont}{}{0pt}{}
+\titlespacing*{\chapter}{0pt}{0pt}{12pt}
+\newcommand{\secrule}{\makebox[0pt][l]{\raisebox{20pt}[0pt][0pt]{\color{black!35}\rule{\linewidth}{0.6pt}}}}
+\titleformat{\section}[block]{\color{acc}\fontsize{16}{20}\selectfont}{\secrule\thesection}{0.6em}{}
+\titleformat{name=\section,numberless}[block]{\color{acc}\fontsize{16}{20}\selectfont}{}{0pt}{\secrule}
+\titleformat{\subsection}{\color{acc}\fontsize{14}{17}\selectfont}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{}{0em}{}
+\titlespacing*{\section}{0pt}{30pt}{4pt}
+\titlespacing*{\subsection}{0pt}{10pt}{3pt}
+\titlespacing*{\subsubsection}{0pt}{8pt}{2pt}
+
+\titleformat{\part}[display]{\centering\color{titlegrey}}{\Large\color{acc}Part \thepart}{10pt}{\fontsize{28}{34}\selectfont}
+
+% only a page number, bottom right
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[R]{\sffamily\small\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[R]{\sffamily\small\thepage}\renewcommand{\headrulewidth}{0pt}}
+
+% table of contents
+\renewcommand{\cftchapfont}{\normalfont}
+\renewcommand{\cftchappagefont}{\normalfont}
+\renewcommand{\cftchapleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\cftpartfont}{\normalfont\bfseries}
+\renewcommand{\cftpartpagefont}{\normalfont\bfseries}
+\renewcommand{\cftsecindent}{1.5em}
+\setlength{\cftbeforechapskip}{3pt}
+\setlength{\cftbeforepartskip}{10pt}
+\addto\captionsenglish{\renewcommand{\contentsname}{Table of Contents}}
+
+% ---------------------------------------------------------------- callouts
+% Plain paragraphs with a bold lead-in label. No coloured boxes.
+\newenvironment{callout}[1]{\par\addvspace{6pt}\textbf{#1}\par\nobreak\vspace{1pt}}{\par\addvspace{6pt}}
+\newenvironment{keybox}[1][]{\begin{callout}{#1}}{\end{callout}}
+\newenvironment{trap}{\par\addvspace{6pt}\textbf{Pitfall:}\ }{\par\addvspace{6pt}}
+\newenvironment{findingbox}{\par\addvspace{6pt}\textbf{What you are proving:}\ }{\par\addvspace{6pt}}
+\newenvironment{lab}[1][]{\begin{callout}{Hands-on: #1}}{\end{callout}}
+\newenvironment{objectives}{\begin{callout}{In this chapter:}}{\end{callout}}
+\newenvironment{summarybox}{\begin{callout}{Key points to remember:}}{\end{callout}}
+
+% chapter metadata line: \chapterinfo{phase}{primary standards}
+\newcommand{\chapterinfo}[2]{{\raggedright\small\color{subgrey}%
+  \textbf{Phase:} #1\quad·\quad\textbf{Maps to:} #2\par}\smallskip}
+
+% ---------------------------------------------------------------- code listings
+\usepackage{listings}
+\lstdefinestyle{sh}{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  breaklines=true,breakatwhitespace=false,
+  columns=fullflexible,keepspaces=true,
+  frame=none,xleftmargin=6pt,xrightmargin=6pt,
+  aboveskip=6pt,belowskip=6pt,showstringspaces=false,
+  commentstyle=\color{subgrey}\itshape,
+}
+\lstset{style=sh}
+
+% ---------------------------------------------------------------- inline helpers
+\newcommand{\mtop}[1]{\textbf{#1}}                % Mobile Top 10 id, e.g. \mtop{M9}
+\newcommand{\masvs}[1]{\texttt{\small MASVS-#1}}  % MASVS control reference
+\newcommand{\ui}[1]{\textsf{#1}}                  % UI label / setting name
+\newcommand{\cb}{$\square$\ }                     % checkbox
+\newcommand{\cmd}[1]{\texttt{#1}}                 % inline command / path
+
+% ---------------------------------------------------------------- diagrams
+\tikzset{
+  db/.style={draw=acc,fill=acc!6,rounded corners=2pt,align=center,inner sep=3pt,font=\sffamily\scriptsize},
+  dk/.style={db,fill=acc!22},
+  dw/.style={draw=warn,fill=warn!8,rounded corners=2pt,align=center,inner sep=3pt,font=\sffamily\scriptsize},
+  dz/.style={draw=black!40,dashed,rounded corners=4pt,inner sep=5pt},
+  zl/.style={font=\sffamily\scriptsize\bfseries,text=black!60,anchor=north west,inner sep=2pt},
+  da/.style={-{Latex[length=2mm]},thick,acc},
+  dl/.style={font=\sffamily\scriptsize,fill=white,inner sep=1pt,align=center},
+  num/.style={circle,fill=acc,text=white,font=\sffamily\scriptsize\bfseries,inner sep=1pt,minimum size=3.6mm},
+}
+\usepackage{adjustbox}

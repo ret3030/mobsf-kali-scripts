@@ -1,0 +1,17 @@
+# build artifacts
+build/
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+
+# proprietary fonts: supply locally to rebuild (see README)
+fonts/
+
+# engagement output: never commit client artifacts
+recon_*/
+*.apk
+*.ab
+appdata.tar

@@ -1,0 +1,46 @@
+\chapter{Platform and Business Logic}\label{ch:logic}
+\chapterinfo{On-device, backend (in scope only)}{\mtop{M3} \mtop{M4} \mtop{M6}; \masvs{AUTH} \masvs{PLATFORM}}
+
+The defects that matter most to a client are often not in a library but in how the app's own workflows can be abused. These need the white-box understanding of the feature plus hands-on manipulation of the running app and its API.
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Test authentication flows: lockout, brute force, and biometric fallback (\mtop{M3}).
+\item Test transaction and payment logic for client-trust and replay (\mtop{M3}, \mtop{M4}).
+\item Test multi-step workflows for step-skipping and state manipulation.
+\item Check privacy leakage through notifications and third-party flows (\mtop{M6}).
+\end{itemize}
+\end{objectives}
+
+\section{Authentication flows}
+\begin{findingbox}
+A login, PIN, or biometric gate that can be worn down or sidestepped. (\masvs{AUTH-1})
+\end{findingbox}
+Test account lockout and server-side rate limiting on login and on any PIN or OTP entry. Check that a local PIN or pattern is verified server-side where it protects server data, and that biometric authentication is bound to a Keystore key use rather than a boolean the app can be made to skip. Test the fallback path: an app that falls back from biometric to a weak secret is only as strong as the fallback.
+
+\section{Transaction and payment logic}
+\begin{findingbox}
+The server accepts a value or outcome the client should not be trusted to set. (\masvs{AUTH-3})
+\end{findingbox}
+Where the app handles money or entitlements, test whether the client is trusted for price, amount, quantity, or currency, and whether a purchase or transfer can be replayed or re-ordered. Intercept and modify the relevant requests within scope and confirm whether the server independently validates the result.
+
+\section{Workflow and state manipulation}
+\begin{findingbox}
+A required step that can be skipped, or application state the client can set past a check. (\masvs{AUTH-3})
+\end{findingbox}
+For multi-step flows (registration with verification, checkout, KYC), test whether a later step can be reached without completing an earlier one, whether a verification step can be omitted, and whether app state carried to the server can be manipulated to bypass a gate.
+
+\section{Privacy and third-party surfaces (\mtop{M6})}
+\begin{findingbox}
+PII exposed through platform surfaces or over-shared with third parties. (privacy, \masvs{PLATFORM})
+\end{findingbox}
+Check notification content on the lock screen, data sent to analytics and advertising SDKs against what the privacy policy states, and the handling of tokens in third-party authentication (OAuth) redirects. Over-collection and silent sharing are reportable privacy findings even when no classic vulnerability is present.
+
+\begin{summarybox}
+\begin{itemize}
+\item Prove server-side rate limiting and lockout; test the biometric fallback, not just the happy path.
+\item For money and entitlements, confirm the server validates value and guards against replay.
+\item Test whether required workflow steps can be skipped or state manipulated past a check.
+\item Treat lock-screen leakage and silent third-party sharing as reportable privacy findings.
+\end{itemize}
+\end{summarybox}

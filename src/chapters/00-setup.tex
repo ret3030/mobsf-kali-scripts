@@ -1,0 +1,104 @@
+\chapter{Engagement Setup and the Kali Lab}\label{ch:setup}
+\chapterinfo{Pre-engagement}{Rules of engagement, MASTG-TECH-0003 (preparation)}
+
+Before any analysis, pin down what you are allowed to touch and build a lab that gives repeatable results. Time spent here is recovered many times over: a clean artifact record prevents arguments about versions, and an isolated device keeps your interception from leaking into anything real.
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Confirm scope and authorisation, and record the exact artifact under test.
+\item Stand up a rooted test device or emulator, with a trusted interception CA.
+\item Install the Kali toolkit and verify each tool runs.
+\item Fix the directory layout and evidence conventions you will reuse on every job.
+\end{itemize}
+\end{objectives}
+
+\section{Scope and authorisation}
+Read the SOW and rules of engagement before you unzip anything. Confirm in writing which of these the client has authorised: static analysis of the APK and source, dynamic and runtime instrumentation on a device you control, network interception, and testing of named backend endpoints. Backend API testing is a separate authorisation from client-side testing; if the SOW does not list an endpoint, do not send traffic to it.
+
+\begin{trap}
+The most common scoping error is treating the app's backend as in scope because the app talks to it. The app is authorised; the server is only authorised if the SOW says so. When the app points at production, ask for a staging environment in writing, and record which environment you tested in the report.
+\end{trap}
+
+\subsection{Record the artifact}
+Capture these facts once and quote them in the report so every finding is anchored to a specific build.
+
+\begin{table}[htbp]\centering\small
+\caption{Artifact facts to record before testing.}\label{tab:artifact}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{4.2cm}X@{}}
+\toprule
+Fact & How to get it\\\midrule
+Package name, version name, version code & \cmd{aapt dump badging app.apk}\\
+Build type (debug vs release) & manifest \cmd{android:debuggable}, signing scheme\\
+Signing certificate and scheme (v1/v2/v3) & \cmd{apksigner verify --print-certs -v app.apk}\\
+SHA-256 of the artifact & \cmd{sha256sum app.apk}\\
+Source commit hash & from the client's repository\\
+Split APKs present (for an AAB) & list all and note which you test\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{The test device}
+Use a dedicated rooted device or an emulator, never a personal phone, and keep it on an isolated network. Two workable options:
+
+\begin{itemize}
+\item \textbf{Android Studio emulator}, a Google APIs image (not Google Play) so it is rootable. Writable system partition with \cmd{emulator -writable-system} lets you install a CA into the system store. Fast to snapshot and reset.
+\item \textbf{Physical device} rooted with Magisk, for testing hardware-backed Keystore, biometrics, and real network conditions that an emulator cannot reproduce.
+\end{itemize}
+
+\subsection{Interception CA in the system trust store}
+Since Android 7, apps trust user-added CAs only if their network security config opts in, which release builds rarely do. To intercept, install your Burp or mitmproxy CA as a \emph{system} certificate on the rooted device or writable-system emulator. The full procedure is in Chapter~\ref{ch:network}; set it up now so the device is ready.
+
+\begin{trap}
+A user-store CA that silently fails to intercept is mistaken for certificate pinning more often than real pinning is. Confirm the CA is in the system store first, then conclude pinning only after you have ruled out the trust-store issue.
+\end{trap}
+
+\section{The Kali toolkit}
+Install the toolkit once. The categories below map to the phases in the rest of the guide.
+
+\begin{table}[htbp]\centering\small
+\caption{Toolkit by phase.}\label{tab:tools}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{3.4cm}X@{}}
+\toprule
+Phase & Tools\\\midrule
+Unpack and decompile & \cmd{apktool}, \cmd{jadx}, \cmd{aapt}, \cmd{apksigner}, \cmd{unzip}\\
+Secret and code scanning & \cmd{ripgrep}, \cmd{semgrep}, \cmd{trufflehog}, \cmd{MobSF}\\
+Device and runtime & \cmd{adb} (platform-tools), \cmd{frida}, \cmd{objection}\\
+Network & Burp Suite or \cmd{mitmproxy}, \cmd{nuclei} (in-scope endpoints only)\\
+Native libraries & \cmd{radare2} or Ghidra, \cmd{nm}, \cmd{strings}\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{lab}[install the toolkit on Kali]
+Run the installer from the toolkit (\cmd{scripts/setup-kali.sh}), or the equivalent by hand:
+\begin{lstlisting}
+sudo apt update && sudo apt install -y \
+  apktool jadx apksigner aapt adb default-jre python3-pip ripgrep radare2
+pipx install frida-tools objection semgrep
+sudo docker pull opensecurity/mobile-security-framework-mobsf:latest
+# trufflehog (optional, verified-secret scanning):
+curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+  | sudo sh -s -- -b /usr/local/bin
+\end{lstlisting}
+Verify: \cmd{jadx --version}, \cmd{frida --version}, \cmd{objection version}, \cmd{adb devices}.
+\end{lab}
+
+\section{Evidence layout}
+Keep one directory per engagement and never run interpreters or build tools from inside an extracted APK: a decompiled tree can contain files named to shadow a module you import. Decompile and scan with the output written to a separate, clean directory, and pass paths as arguments. The toolkit's recon script (Chapter~\ref{ch:report} and the repository's \cmd{scripts/} folder) follows this layout:
+
+\begin{lstlisting}
+recon_<app>_<timestamp>/
+  apk.sha256          artifact hash
+  decoded/            apktool output (manifest, resources, smali)
+  jadx/sources/       decompiled Java for manual review
+  scans/              manifest flags, secrets, signing, scanner output
+\end{lstlisting}
+
+\begin{summarybox}
+\begin{itemize}
+\item Get authorisation in writing, and treat the backend as out of scope until the SOW names it.
+\item Record package, versions, signing, and the artifact hash before you start.
+\item Test on an isolated rooted device or writable-system emulator, CA in the \emph{system} store.
+\item Keep extracted APK content in its own directory, separate from any scripts you run.
+\end{itemize}
+\end{summarybox}

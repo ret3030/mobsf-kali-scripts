@@ -1,0 +1,103 @@
+\frontmatter
+% ------------------------------------------------------------------ title page
+\begin{titlepage}
+\centering
+\vspace*{6.2cm}
+{\color{titlegrey}\fontsize{40}{50}\selectfont Android Application\\ Penetration Testing\par}
+\vspace{14pt}
+{\color{titlegrey}\fontsize{18}{24}\selectfont A White-Box Field Guide and Kali Toolkit\par}
+\vspace{2.6cm}
+{\color{subgrey}\large\addfontfeatures{LetterSpace=4}Author: \guideauthor\par}
+\vfill
+\raggedright{\sffamily\small © 2026 \guideauthor. All rights reserved.}
+\end{titlepage}
+
+% ------------------------------------------------------------------ copyright page
+\thispagestyle{empty}
+{\small
+\textbf{\guidetitle: \guidesubtitle}\\
+Written and compiled by \guideauthor\\
+© 2026 \guideauthor. All rights reserved.
+
+This guide is for use by authorised security professionals only. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means without the prior written permission of the author.
+
+First edition: \guidedate. This is version \guideversion. Content is current as of \guidecurrency.
+
+\medskip
+\textbf{Authorisation and legal use}\\
+Every technique in this guide is intended for testing you are explicitly authorised to perform, under a signed statement of work (SOW), rules of engagement, or equivalent written permission that names the target application and the in-scope backend. Accessing, intercepting, or instrumenting applications or systems without authorisation is illegal in most jurisdictions. The author accepts no liability for misuse or for any loss arising from the information in this guide.
+
+\medskip
+\textbf{Scope convention of this guide}\\
+The methodology is written for a white-box engagement with access to the APK and source code. It is non-destructive by design: the goal is to discover and evidence defects, not to modify the application, repackage it, or defeat its controls beyond what is required to observe a vulnerability on a device you control. Where a control such as certificate pinning or root detection must be bypassed to continue testing, that bypass is treated as an observation to document, never as a deliverable.
+
+\medskip
+\textbf{Trademarks}\\
+Android is a trademark of Google LLC. Kali Linux is a trademark of OffSec. Burp Suite is a trademark of PortSwigger. OWASP, MASVS, MASTG, and the OWASP Mobile Application Security project are trademarks of the OWASP Foundation. Frida, MobSF, and other tools named here belong to their respective authors and projects. This is an independent publication and is not affiliated with, authorised, sponsored, or endorsed by any of them.
+
+\medskip
+\textbf{Standards basis}\\
+The methodology follows the OWASP Mobile Application Security Verification Standard (MASVS) and Mobile Application Security Testing Guide (MASTG), and reports findings against the OWASP Mobile Top 10 (2024). References point to those documents at \texttt{mas.owasp.org}.
+
+\medskip
+\textbf{Typeset} with XeLaTeX (Tectonic) in Cambria and Aptos.
+}
+\clearpage
+
+% ------------------------------------------------------------------ revision history
+\chapter*{Revision History}
+\markboth{Revision History}{}
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+\textbf{Version} & \textbf{Date} & \textbf{Changes}\\\midrule
+1.0 & 4 November 2026 & First edition: engagement setup, static analysis, local storage, dynamic and runtime analysis, network and API, platform and business logic, OWASP Mobile Top 10 mapping, reporting, and the Kali recon toolkit.\\
+\bottomrule
+\end{tabularx}
+
+\tableofcontents
+\listoftables
+
+% ------------------------------------------------------------------ introduction
+\chapter{Introduction}
+\markboth{Introduction}{}
+
+This is a working methodology for testing an Android application end to end on a single engagement. It assumes a white-box position: you hold the release APK (or the split APKs of an AAB), the application source, and a signed authorisation that names the target and any in-scope backend. The audience is a practising tester who already knows the Android platform and wants a repeatable order of work, a complete checklist, and the exact Kali tooling to run at each step.
+
+The guide is organised by the natural order of an engagement, from environment setup through static analysis, storage review, dynamic and runtime analysis, network and API testing, and business logic, ending with how to map and report everything. The risk taxonomy that ties it together is the OWASP Mobile Top 10.
+
+\section*{How to use this guide}
+Work the chapters in order. Each chapter opens with its phase and the standards it maps to, lists what you will cover, gives a one-screen summary and the common pitfalls, then works through the detail with the commands to run. Tag every finding with its Mobile Top 10 identifier as you go, and carry the deeper MASVS control alongside it. When you reach the reporting chapter, you sort by the Top 10 so the client reads the risk in language their stakeholders already know, while the developers remediate against the MASVS reference.
+
+\section*{The two standards, and why both}
+The \textbf{OWASP Mobile Top 10} is the awareness and reporting layer: ten risk categories that a non-specialist audience understands. The \textbf{MASVS} is the verification standard, a set of controls grouped into domains (storage, crypto, authentication, network, platform, code quality, resilience). The \textbf{MASTG} is the test manual that tells you, case by case, how to verify each control. A mature finding cites both layers, for example \mtop{M9} Insecure Data Storage with \masvs{STORAGE-1}. That pairing is what separates a professional report from a tool dump.
+
+\section*{Primary methodology: OWASP Mobile Top 10 (2024)}
+This is the taxonomy you report against. Every test in the chapters that follow maps to one of these categories. Table~\ref{tab:top10} is the master map: keep it open while you test and use the right-hand column to navigate.
+
+\begin{table}[htbp]\centering\small
+\caption{OWASP Mobile Top 10 (2024), what each category proves, and where it is tested in this guide.}\label{tab:top10}
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}p{3.5cm}X>{\raggedright\arraybackslash}p{1.9cm}@{}}
+\toprule
+\textbf{ID} & \textbf{Category} & \textbf{What you prove} & \textbf{Chapter}\\\midrule
+\mtop{M1} & Improper Credential Usage & Hardcoded secrets and keys, credentials in logs, static or reused credentials & 1, 3\\
+\mtop{M2} & Inadequate Supply Chain Security & Vulnerable third-party libraries and SDKs, unverified native code & 1\\
+\mtop{M3} & Insecure Authentication / Authorization & Weak sessions, token mishandling, missing server-side authorization, IDOR/BOLA & 4, 5\\
+\mtop{M4} & Insufficient Input/Output Validation & Local injection, deep link and intent abuse, WebView injection & 1, 5\\
+\mtop{M5} & Insecure Communication & Cleartext traffic, weak TLS, broken or absent pinning & 1, 4\\
+\mtop{M6} & Inadequate Privacy Controls & PII leakage through logs, clipboard, notifications, screenshots & 2, 3, 5\\
+\mtop{M7} & Insufficient Binary Protections & Debuggable builds, missing anti-tamper and anti-hook controls & 1, 3\\
+\mtop{M8} & Security Misconfiguration & Exported components, backup and debug flags, permissive network config & 1\\
+\mtop{M9} & Insecure Data Storage & Cleartext local storage, weak Keystore use, cache and backup exposure & 2\\
+\mtop{M10} & Insufficient Cryptography & ECB, static keys and IVs, weak hashes, home-grown crypto & 1\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section*{Conventions used in this guide}
+\textbf{What you are proving:} the concrete defect a test is meant to demonstrate, phrased so it can go straight into a finding.
+
+\textbf{Pitfall:} a mistake or false assumption that wastes time or produces a wrong result.
+
+\textbf{Hands-on:} commands to run against the target on a device or emulator you control.
+
+Mobile Top 10 identifiers are shown in bold (\mtop{M9}); MASVS controls in monospace (\masvs{STORAGE-1}); commands, flags, and paths in monospace (\cmd{adb logcat}); on-screen labels in \ui{sans-serif}. Commands assume Kali Linux with the toolkit from Chapter~\ref{ch:setup} installed, and a rooted test device or emulator reachable over \cmd{adb}.

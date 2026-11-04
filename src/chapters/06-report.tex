@@ -1,0 +1,75 @@
+\chapter{Mapping, Severity, and Reporting}\label{ch:report}
+\chapterinfo{Reporting}{OWASP Mobile Top 10, MASVS, CVSS}
+
+A test is only as good as the report. This chapter turns the findings you tagged along the way into a document the client can act on: each finding mapped to the Mobile Top 10 and a MASVS control, rated consistently, and evidenced so a developer can reproduce and fix it.
+
+\begin{objectives}
+\begin{itemize}[leftmargin=12pt]
+\item Map every finding to its Mobile Top 10 category and MASVS control.
+\item Rate severity consistently with a rubric the client accepts.
+\item Write findings a developer can reproduce and remediate.
+\item Report coverage, and state clearly what was out of scope or blocked.
+\end{itemize}
+\end{objectives}
+
+\section{Mobile Top 10 to MASVS cross-reference}
+Report headlines by Mobile Top 10 so stakeholders read familiar risk language; carry the MASVS control so developers remediate against a verifiable requirement. Table~\ref{tab:masvsmap} is the working cross-reference.
+
+\begin{table}[htbp]\centering\small
+\caption{Mobile Top 10 category to the MASVS domains that verify it.}\label{tab:masvsmap}
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}p{4.3cm}X@{}}
+\toprule
+\textbf{ID} & \textbf{Category} & \textbf{Primary MASVS domains}\\\midrule
+\mtop{M1} & Improper Credential Usage & \masvs{STORAGE}, \masvs{AUTH}\\
+\mtop{M2} & Inadequate Supply Chain Security & \masvs{CODE}\\
+\mtop{M3} & Insecure Authentication / Authorization & \masvs{AUTH}\\
+\mtop{M4} & Insufficient Input/Output Validation & \masvs{CODE}, \masvs{PLATFORM}\\
+\mtop{M5} & Insecure Communication & \masvs{NETWORK}\\
+\mtop{M6} & Inadequate Privacy Controls & \masvs{PRIVACY}, \masvs{STORAGE}\\
+\mtop{M7} & Insufficient Binary Protections & \masvs{RESILIENCE}\\
+\mtop{M8} & Security Misconfiguration & \masvs{PLATFORM}\\
+\mtop{M9} & Insecure Data Storage & \masvs{STORAGE}\\
+\mtop{M10} & Insufficient Cryptography & \masvs{CRYPTO}\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Severity}
+Rate with CVSS or the client's own rubric, applied the same way to every finding. Two adjustments specific to mobile: weight a client-side-only control (resilience, obfuscation) lower when the server re-verifies the action it guards, and weight a storage or credential finding higher when the data survives logout or the credential is static across all installs. Record the reasoning so the rating is defensible.
+
+\section{The finding}
+Each finding carries, in order:
+
+\begin{itemize}
+\item \textbf{Title} and \textbf{Mobile Top 10 ID} plus \textbf{MASVS control} (for example \mtop{M9} / \masvs{STORAGE-1}).
+\item \textbf{Severity} with the rating basis.
+\item \textbf{Affected component} as \cmd{file:line} from the source, or the exact request, so it is unambiguous.
+\item \textbf{Reproduction steps} and \textbf{evidence} (commands, screenshots, captured requests).
+\item \textbf{Impact} in the client's terms, and \textbf{remediation} that points at the MASVS requirement.
+\end{itemize}
+
+\begin{trap}
+Do not report a scanner hit you did not confirm, and do not report a public identifier as a leaked secret. A single unverified finding costs you credibility on the whole report. Verify impact, then write it up.
+\end{trap}
+
+\section{Coverage and scope}
+Map what you tested to the MASVS domains so the client sees the breadth of the engagement and, equally, what was not covered. List out-of-scope items explicitly, and record anything blocked by a lack of backend access or a missing staging environment. A report that states its limits is trusted more than one that implies total coverage.
+
+\section{The recon toolkit}
+The repository's \cmd{scripts/} folder holds two helpers that support this methodology:
+
+\begin{itemize}
+\item \cmd{setup-kali.sh} installs the toolkit from Chapter~\ref{ch:setup}.
+\item \cmd{android-recon.sh} runs the read-only static triage from Chapter~\ref{ch:static}: it hashes the artifact, decodes and decompiles it, extracts the manifest and signing facts, flags risky manifest settings, greps for secrets and endpoints, lists native libraries, and runs semgrep and trufflehog when present. It never modifies the APK. Its output follows the evidence layout from Chapter~\ref{ch:setup}, giving you a populated \cmd{scans/} directory to start manual review from.
+\end{itemize}
+
+Run \cmd{android-recon.sh} first on every engagement to get a baseline in minutes, then work the chapters by hand. The script accelerates triage; it does not replace the reading.
+
+\begin{summarybox}
+\begin{itemize}
+\item Headline by Mobile Top 10, remediate by MASVS; carry both on every finding.
+\item Rate consistently, adjusting for server re-verification and for data that outlives the session.
+\item Anchor each finding to \cmd{file:line} or an exact request, with reproducible evidence.
+\item State coverage and scope limits plainly; an honest boundary builds trust.
+\end{itemize}
+\end{summarybox}

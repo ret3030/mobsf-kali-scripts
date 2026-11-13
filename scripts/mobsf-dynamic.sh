@@ -36,8 +36,13 @@ fi
 adb kill-server; adb start-server
 
 if [ -x "$SDK/emulator/emulator" ]; then
+  # Software GL: host GL in a VM gives a grey screen and can crash the terminal. No window by default:
+  # MobSF shows the screen in the browser. SHOW_EMULATOR=1 opens the window.
+  WINDOW=-no-window; [ "${SHOW_EMULATOR:-0}" = 1 ] && WINDOW=
   # -writable-system lets MobSF install its CA into the system store; -no-snapshot avoids stale state.
-  "$SDK/emulator/emulator" -avd "$AVD" -writable-system -no-snapshot -no-audio >"/tmp/emulator-$AVD.log" 2>&1 &
+  # shellcheck disable=SC2086
+  "$SDK/emulator/emulator" -avd "$AVD" -writable-system -no-snapshot -no-audio -gpu swiftshader_indirect \
+    $WINDOW >"/tmp/emulator-$AVD.log" 2>&1 &
   EMU=$!
   trap 'kill $EMU 2>/dev/null || true' EXIT
 fi

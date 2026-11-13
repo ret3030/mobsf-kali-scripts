@@ -11,8 +11,8 @@ set -euo pipefail
 TOOLS="$HOME/tools"
 MOBSF_DIR="$TOOLS/MobSF"
 SDK="$HOME/Android/Sdk"
-AVD="mobsf-api28"
-API=28
+AVD="mobsf-api30"
+API=30
 # Pinned cmdline-tools build; bump it if Google removes the file.
 CMDLINE_TOOLS=11076708
 
@@ -58,7 +58,7 @@ if [ "$ARCH" != "x86_64" ]; then
 
 Run the emulator on the host (macOS) instead, then on the host:
     adb kill-server; adb -a -P 5037 nodaemon server
-and here before scripts/mobsf-dynamic.sh:
+and set before the dynamic scan:
     export ADB_SERVER_SOCKET=tcp:<host-ip>:5037
     export MOBSF_ANALYZER_IDENTIFIER=emulator-5554
 EOF
@@ -85,7 +85,8 @@ fi
 SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
 yes | "$SDKM" --licenses >/dev/null || true
 # google_apis (not google_apis_playstore): the Play image has no adb root.
-# API 28: with emulator 37.x, Android 10/11 images boot-loop once verity is disabled, API 28 does not.
+# API 30 (Android 11): dynamic-scan.sh installs the proxy CA via tmpfs, so a writable /system
+# (which boot-loops newer emulators) is never needed.
 "$SDKM" "platform-tools" "emulator" "platforms;android-$API" "system-images;android-$API;google_apis;x86_64"
 
 echo "[*] AVD $AVD"
@@ -103,12 +104,12 @@ done
 
 echo "[*] Avoid two adb servers fighting over the device"
 if dpkg -s adb >/dev/null 2>&1; then
-  echo "    apt 'adb' is installed (from setup-kali.sh). The SDK adb is used by mobsf-dynamic.sh;"
+  echo "    apt 'adb' is installed (from setup-kali.sh). The SDK adb is used by the scan scripts;"
   echo "    if 'adb devices' flaps, run: sudo apt remove adb"
 fi
 
 cat <<EOF
 
 [*] Done. MobSF login is mobsf / mobsf: change it in the web UI after the first start.
-    Start every session with: scripts/mobsf-dynamic.sh
+    Static: scripts/static-scan.sh app.apk   Dynamic: scripts/dynamic-scan.sh app.apk
 EOF

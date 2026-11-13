@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # mobsf-doctor.sh: read-only check that MobSF and the emulator are set up correctly.
-# Run as the same user that runs mobsf-dynamic.sh. Changes nothing.
+# Run as the same user that runs the scan scripts. Changes nothing.
 # Must be executed, not sourced: with set -e a sourced exit would close your shell.
 (return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -uo pipefail
 
 SDK="$HOME/Android/Sdk"
-AVD="mobsf-api28"
-API=28
+AVD="mobsf-api30"
+API=30
 MOBSF_DIR="$HOME/tools/MobSF"
 SERIAL="${MOBSF_ANALYZER_IDENTIFIER:-emulator-5554}"
 ADB="$SDK/platform-tools/adb"
@@ -72,7 +72,7 @@ for d in "$HOME/tools" "$SDK"; do
   [ ! -e "$d" ] || [ -O "$d" ] || fail "$d not owned by you (earlier sudo run?): sudo chown -R \$USER:\$USER $d"
 done
 if pgrep -u root -f 'gunicorn.*MobSF' >/dev/null; then
-  fail "MobSF runs as root: stop it and start via mobsf-dynamic.sh without sudo"
+  fail "MobSF runs as root: stop it and start via the scan scripts without sudo"
 fi
 [ -d /root/.MobSF ] && warn "/root/.MobSF exists: scans done via sudo are stored there, not in ~/.MobSF"
 if ss -ltn 2>/dev/null | grep -q ':8000 '; then
@@ -105,7 +105,7 @@ echo "== Emulator and adb"
 if pgrep -f "qemu-system.*-avd $AVD|emulator.*-avd $AVD" >/dev/null; then
   ok "emulator process running"
 else
-  warn "emulator not running (mobsf-dynamic.sh starts it)"
+  warn "emulator not running (dynamic-scan.sh starts it)"
 fi
 if [ -x "$ADB" ]; then
   state="$("$ADB" -s "$SERIAL" get-state 2>/dev/null || true)"
@@ -113,7 +113,7 @@ if [ -x "$ADB" ]; then
     ok "adb sees $SERIAL"
     boot="$("$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
     [ "$boot" = 1 ] && ok "boot completed" || fail "emulator not booted yet (sys.boot_completed='$boot')"
-    "$ADB" -s "$SERIAL" shell id 2>/dev/null | grep -q 'uid=0' && ok "adb shell is root" || warn "adb shell is not root: mobsf-dynamic.sh runs 'adb root'"
+    "$ADB" -s "$SERIAL" shell id 2>/dev/null | grep -q 'uid=0' && ok "adb shell is root" || warn "adb shell is not root: dynamic-scan.sh runs 'adb root'"
     sdk="$("$ADB" -s "$SERIAL" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')"
     [ "$sdk" = "$API" ] && ok "Android API $sdk" || warn "Android API '$sdk', expected $API"
   else

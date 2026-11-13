@@ -58,7 +58,7 @@ adb_root() {
 [ -n "$FRIDA_VER" ] || { echo "frida not found in MobSF poetry env"; exit 1; }
 command -v mitmdump >/dev/null || { echo "mitmdump missing: sudo apt install mitmproxy"; exit 1; }
 
-# The API 30 AVD must exist (setup-mobsf.sh creates an API 28 one; create a 30 here if missing).
+# The API 30 AVD must exist (setup-mobsf.sh creates it; create it here if missing).
 if [ ! -f "$HOME/.android/avd/$AVD.avd/config.ini" ]; then
   echo "[*] Creating $AVD (Android $API)"
   export ANDROID_SDK_ROOT="$SDK" ANDROID_HOME="$SDK"

@@ -69,7 +69,7 @@ cd ~/android-pentest-guide
 Oba skripty spouštěj jako `NOVY`. `sudo` si vyžádají jen u `apt`. Pak odhlas a přihlas (skupina `kvm`) a spusť:
 
 ```bash
-./scripts/mobsf-dynamic.sh
+./scripts/dynamic-scan.sh app.apk
 ```
 
 Kontrola vlastnictví:

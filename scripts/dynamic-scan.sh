@@ -145,6 +145,36 @@ else
 fi
 MITM_PID=$!
 sleep 2
+## Počkat, až system_server zaregistruje službu 'settings'
+for _ in $(seq 1 30); do
+  if adb shell service check settings 2>/dev/null | grep -q "found"; then
+    break
+  fi
+  sleep 2
+done
+
+# Nastavení proxy s opakováním pro případ pomalé inicializace (-wipe-data)
+for _ in $(seq 1 10); do
+  if adb shell settings put global http_proxy "$HOST_FROM_GUEST:$PROXY_PORT" 2>/dev/null; then
+    break
+  fi
+  sleep 2
+done Počkat, až system_server zaregistruje službu 'settings'
+for _ in $(seq 1 30); do
+  if adb shell service check settings 2>/dev/null | grep -q "found"; then
+    break
+  fi
+  sleep 2
+done
+
+# Nastavení proxy s opakováním pro případ pomalé inicializace (-wipe-data)
+for _ in $(seq 1 10); do
+  if adb shell settings put global http_proxy "$HOST_FROM_GUEST:$PROXY_PORT" 2>/dev/null; then
+    break
+  fi
+  sleep 2
+done
+
 adb shell settings put global http_proxy "$HOST_FROM_GUEST:$PROXY_PORT"
 echo "[*] Device proxy: $(adb shell settings get global http_proxy | tr -d '\r')"
 

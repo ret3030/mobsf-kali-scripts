@@ -91,4 +91,6 @@ fi
 echo "[*] Device ready: API $(adb -s "$MOBSF_ANALYZER_IDENTIFIER" shell getprop ro.build.version.sdk | tr -d '\r')"
 echo "[*] MobSF on http://127.0.0.1:$PORT (localhost only)"
 cd "$MOBSF_DIR"
+# Poetry remembers the last env it used; pin it to the supported Python so it never switches to 3.14.
+[ -n "$PY" ] && python3 -m poetry env use "$PY" >/dev/null
 ./run.sh "127.0.0.1:$PORT"

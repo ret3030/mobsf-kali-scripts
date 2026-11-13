@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # report.py: merge the latest static, SBOM and dynamic outputs under ~/mobsf-out into one
-# short Markdown report. Run after the scan scripts. This is a working draft for a human to
-# verify, not a finished deliverable.
+# report (Markdown by default, self-contained HTML with --html). Run after the scan scripts.
+# This is a working draft for a human to verify, not a finished deliverable.
 #
-# Usage: scripts/report.py [--match SUBSTR] [-o report.md]
+# Usage: scripts/report.py [--match SUBSTR] [--html] [-o OUTFILE]
 import argparse
+import base64
+import html
 import json
 import re
 import sys
@@ -20,7 +22,6 @@ FRAMEWORK = ("googleapis.com", "gstatic.com", "google.com", "googleadservices.co
 
 
 def latest(prefix, must_contain, match):
-    """Most recent output dir whose name starts with prefix, holds must_contain, matches filter."""
     cands = [
         d for d in OUT_ROOT.glob(prefix + "*")
         if d.is_dir() and (d / must_contain).exists() and (match in d.name)
@@ -59,73 +60,190 @@ def read_flows(flows_path):
     return sorted(hosts), sorted(cleartext), app_secrets, fw
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--match", default="")
-    ap.add_argument("-o", "--out", default=None)
-    args = ap.parse_args()
-
-    static = latest("", "report.json", args.match)
-    # The static dir has no prefix, so exclude the sbom-/dyn- ones that also lack report.json anyway.
-    sbom = latest("sbom-", "sbom.cdx.json", args.match)
-    dyn = latest("dyn-", "traffic.flows", args.match)
+def gather(match):
+    """Collect facts from the latest outputs into one dict the renderers consume."""
+    static = latest("", "report.json", match)
+    sbom = latest("sbom-", "sbom.cdx.json", match)
+    dyn = latest("dyn-", "traffic.flows", match)
     if not any((static, sbom, dyn)):
         sys.exit("No scan outputs found under ~/mobsf-out (run the scan scripts first).")
 
-    out = []
-    w = out.append
-    w(f"# Android pentest report\n")
-    w(f"_Generated {time.strftime('%Y-%m-%d %H:%M')} — working draft, verify every finding by hand._\n")
+    data = {"generated": time.strftime("%Y-%m-%d %H:%M"),
+            "app": None, "static": None, "sbom": None, "dynamic": None}
 
     if static:
         r = json.load(open(static / "report.json"))
         a = r.get("appsec", {})
-        w("## App\n")
-        w(f"- **Name:** {r.get('app_name')} {r.get('version_name','')}")
-        w(f"- **Package:** `{r.get('package_name')}`")
-        w(f"- **SDK:** min {r.get('min_sdk')}, target {r.get('target_sdk')}")
-        w(f"- **MobSF security score:** {a.get('security_score')}/100")
-        w(f"- **Trackers:** {a.get('total_trackers')}")
-        w(f"- **Exported:** {len(r.get('exported_activities') or [])} activities, "
-          f"{len(r.get('providers') or [])} providers\n")
-        w("## Static findings\n")
-        for level in ("high", "warning"):
-            items = a.get(level, [])
-            if items:
-                w(f"### {level.title()} ({len(items)})")
-                for it in items:
-                    w(f"- [{it.get('section','')}] {it.get('title','').strip()}")
-                w("")
+        data["app"] = {
+            "name": f"{r.get('app_name')} {r.get('version_name','')}".strip(),
+            "package": r.get("package_name"),
+            "sdk": f"min {r.get('min_sdk')}, target {r.get('target_sdk')}",
+            "score": a.get("security_score"),
+            "trackers": a.get("total_trackers"),
+            "exported_act": len(r.get("exported_activities") or []),
+            "exported_prov": len(r.get("providers") or []),
+        }
+        data["static"] = {
+            "high": [(i.get("section", ""), i.get("title", "").strip()) for i in a.get("high", [])],
+            "warning": [(i.get("section", ""), i.get("title", "").strip()) for i in a.get("warning", [])],
+        }
 
     if sbom:
         s = json.load(open(sbom / "sbom.cdx.json"))
-        vulns = s.get("vulnerabilities", [])
-        w("## Dependencies (SBOM / OSV)\n")
-        w(f"- Components: {len(s.get('components', []))}")
-        w(f"- Known-vulnerable: {len(vulns)}")
-        for v in vulns:
-            sev = (v.get("ratings") or [{}])[0].get("severity", "?")
-            aff = (v.get("affects") or [{}])[0].get("ref", "")
-            w(f"  - [{sev}] {v.get('id')} — {aff}")
-        w("")
+        vulns = []
+        for v in s.get("vulnerabilities", []):
+            vulns.append({
+                "sev": (v.get("ratings") or [{}])[0].get("severity", "?"),
+                "id": v.get("id"),
+                "ref": (v.get("affects") or [{}])[0].get("ref", ""),
+            })
+        data["sbom"] = {"components": len(s.get("components", [])), "vulns": vulns}
 
     if dyn:
         hosts, cleartext, app_secrets, fw = read_flows(dyn / "traffic.flows")
-        w("## Dynamic (network)\n")
-        w(f"- Hosts contacted: {len(hosts)}")
-        if cleartext:
-            w(f"- **Cleartext HTTP:** {', '.join(cleartext)}")
-        w(f"- First-party secret matches: {len(app_secrets)} "
-          f"(+{fw} on Google/analytics hosts, framework noise)")
-        for s in app_secrets[:15]:
-            w(f"  - {s}")
-        w(f"\n- Evidence: `{dyn}` (traffic.flows, appdata.tar, logcat.txt, screen.png)\n")
+        shot = dyn / "screen.png"
+        data["dynamic"] = {
+            "hosts": hosts, "cleartext": cleartext, "app_secrets": app_secrets,
+            "fw": fw, "evidence": str(dyn),
+            "screenshot": str(shot) if shot.exists() else None,
+        }
+    return data
 
-    text = "\n".join(out)
+
+def render_markdown(d):
+    out = ["# Android pentest report\n",
+           f"_Generated {d['generated']} — working draft, verify every finding by hand._\n"]
+    a = d["app"]
+    if a:
+        out += ["## App\n",
+                f"- **Name:** {a['name']}", f"- **Package:** `{a['package']}`",
+                f"- **SDK:** {a['sdk']}", f"- **MobSF security score:** {a['score']}/100",
+                f"- **Trackers:** {a['trackers']}",
+                f"- **Exported:** {a['exported_act']} activities, {a['exported_prov']} providers\n"]
+    if d["static"]:
+        out.append("## Static findings\n")
+        for level in ("high", "warning"):
+            items = d["static"][level]
+            if items:
+                out.append(f"### {level.title()} ({len(items)})")
+                out += [f"- [{sec}] {title}" for sec, title in items]
+                out.append("")
+    if d["sbom"]:
+        s = d["sbom"]
+        out += ["## Dependencies (SBOM / OSV)\n",
+                f"- Components: {s['components']}", f"- Known-vulnerable: {len(s['vulns'])}"]
+        out += [f"  - [{v['sev']}] {v['id']} — {v['ref']}" for v in s["vulns"]]
+        out.append("")
+    if d["dynamic"]:
+        n = d["dynamic"]
+        out += ["## Dynamic (network)\n", f"- Hosts contacted: {len(n['hosts'])}"]
+        if n["cleartext"]:
+            out.append(f"- **Cleartext HTTP:** {', '.join(n['cleartext'])}")
+        out.append(f"- First-party secret matches: {len(n['app_secrets'])} "
+                   f"(+{n['fw']} on Google/analytics hosts, framework noise)")
+        out += [f"  - {s}" for s in n["app_secrets"][:15]]
+        out.append(f"\n- Evidence: `{n['evidence']}`")
+    return "\n".join(out)
+
+
+def _sev_class(sev):
+    s = (sev or "").lower()
+    return "high" if s in ("high", "critical") else "warn" if s in ("warning", "moderate", "medium") else "info"
+
+
+def render_html(d):
+    e = html.escape
+    rows = []
+    a = d["app"]
+    head = f"{e(a['name'])}" if a else "Android pentest report"
+    rows.append(f"<header><h1>Android pentest report</h1>"
+                f"<p class=draft>Generated {d['generated']} — working draft, verify every finding by hand.</p></header>")
+    if a:
+        score = a["score"] or 0
+        sc = "high" if score < 40 else "warn" if score < 70 else "info"
+        rows.append("<section><h2>App</h2><table class=kv>"
+                    f"<tr><td>Name</td><td>{e(a['name'])}</td></tr>"
+                    f"<tr><td>Package</td><td><code>{e(a['package'] or '')}</code></td></tr>"
+                    f"<tr><td>SDK</td><td>{e(a['sdk'])}</td></tr>"
+                    f"<tr><td>Security score</td><td><span class='badge {sc}'>{score}/100</span></td></tr>"
+                    f"<tr><td>Trackers</td><td>{a['trackers']}</td></tr>"
+                    f"<tr><td>Exported</td><td>{a['exported_act']} activities, {a['exported_prov']} providers</td></tr>"
+                    "</table></section>")
+    if d["static"]:
+        rows.append("<section><h2>Static findings</h2>")
+        for level in ("high", "warning"):
+            items = d["static"][level]
+            if not items:
+                continue
+            cls = "high" if level == "high" else "warn"
+            rows.append(f"<h3><span class='badge {cls}'>{level.title()}</span> {len(items)}</h3><ul>")
+            rows += [f"<li><span class=sec>{e(sec)}</span> {e(title)}</li>" for sec, title in items]
+            rows.append("</ul>")
+        rows.append("</section>")
+    if d["sbom"]:
+        s = d["sbom"]
+        rows.append(f"<section><h2>Dependencies (SBOM / OSV)</h2>"
+                    f"<p>Components: <b>{s['components']}</b> · Known-vulnerable: <b>{len(s['vulns'])}</b></p>")
+        if s["vulns"]:
+            rows.append("<ul>")
+            rows += [f"<li><span class='badge {_sev_class(v['sev'])}'>{e(v['sev'])}</span> "
+                     f"{e(v['id'])} — <code>{e(v['ref'])}</code></li>" for v in s["vulns"]]
+            rows.append("</ul>")
+        rows.append("</section>")
+    if d["dynamic"]:
+        n = d["dynamic"]
+        rows.append(f"<section><h2>Dynamic (network)</h2><p>Hosts contacted: <b>{len(n['hosts'])}</b></p>")
+        if n["cleartext"]:
+            rows.append("<p>Cleartext HTTP: " +
+                        " ".join(f"<span class='badge high'>{e(h)}</span>" for h in n["cleartext"]) + "</p>")
+        rows.append(f"<p>First-party secret matches: <b>{len(n['app_secrets'])}</b> "
+                    f"(+{n['fw']} on Google/analytics hosts, framework noise)</p>")
+        if n["app_secrets"]:
+            rows.append("<ul>" + "".join(f"<li><code>{e(s)}</code></li>" for s in n["app_secrets"][:15]) + "</ul>")
+        rows.append("<details><summary>Hosts contacted</summary><ul>" +
+                    "".join(f"<li>{e(h)}</li>" for h in n["hosts"]) + "</ul></details>")
+        if n["screenshot"]:
+            b64 = base64.b64encode(Path(n["screenshot"]).read_bytes()).decode()
+            rows.append(f"<details><summary>Screenshot</summary><img alt=screenshot "
+                        f"src='data:image/png;base64,{b64}'></details>")
+        rows.append(f"<p class=evidence>Evidence: <code>{e(n['evidence'])}</code></p></section>")
+
+    css = """
+    :root{color-scheme:light dark}
+    body{font:15px/1.5 system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+    @media(prefers-color-scheme:dark){body{background:#15171a;color:#e6e6e6}code{color:#9cd}}
+    h1{margin:0 0 .2rem} .draft{color:#b36b00;font-size:.9rem;margin-top:0}
+    section{border-top:1px solid #8884;padding:.5rem 0 1rem}
+    table.kv td{padding:.2rem .6rem .2rem 0} table.kv td:first-child{color:#888;white-space:nowrap}
+    .badge{display:inline-block;padding:.05rem .5rem;border-radius:.6rem;font-size:.8rem;font-weight:600;color:#fff}
+    .badge.high{background:#c0392b} .badge.warn{background:#c98a00} .badge.info{background:#2d7d46}
+    .sec{color:#888;font-size:.8rem;margin-right:.3rem} ul{margin:.3rem 0}
+    code{background:#8882;padding:.05rem .3rem;border-radius:.3rem;font-size:.85em}
+    img{max-width:320px;border:1px solid #8884;border-radius:.4rem;margin-top:.5rem}
+    summary{cursor:pointer;color:#4a90d9} .evidence{color:#888;font-size:.85rem}
+    """
+    return (f"<!doctype html><html lang=en><head><meta charset=utf-8>"
+            f"<meta name=viewport content='width=device-width,initial-scale=1'>"
+            f"<title>Pentest report — {e(head)}</title><style>{css}</style></head>"
+            f"<body>{''.join(rows)}</body></html>")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--match", default="")
+    ap.add_argument("--html", action="store_true", help="write self-contained HTML instead of Markdown")
+    ap.add_argument("-o", "--out", default=None)
+    args = ap.parse_args()
+
+    data = gather(args.match)
+    ext = "html" if args.html else "md"
+    text = render_html(data) if args.html else render_markdown(data)
+
     out_file = Path(args.out) if args.out else (
-        OUT_ROOT / f"report-{args.match or 'latest'}-{time.strftime('%Y%m%d-%H%M%S')}.md")
+        OUT_ROOT / f"report-{args.match or 'latest'}-{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
     out_file.write_text(text)
-    print(text)
+    if not args.html:
+        print(text)
     print(f"\n[written] {out_file}")
 
 

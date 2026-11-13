@@ -16,18 +16,32 @@ fi
 export MOBSF_ADB_BINARY="$(command -v adb)"
 export MOBSF_ANALYZER_IDENTIFIER="${MOBSF_ANALYZER_IDENTIFIER:-emulator-5554}"
 
+# Without KVM the emulator dies (or crawls) inside a VM: enable nested virtualization in the hypervisor.
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+  echo "No access to /dev/kvm. Enable nested virtualization (VMware: Virtualize Intel VT-x/EPT," >&2
+  echo "VirtualBox: Enable Nested VT-x/AMD-V), check 'kvm-ok', and make sure you are in group kvm (id)." >&2
+  exit 1
+fi
+
 # A stale adb server or a leftover MobSF state is the usual cause of "cannot run dynamic analysis".
 adb kill-server; adb start-server
 
 if [ -x "$SDK/emulator/emulator" ]; then
   # -writable-system lets MobSF install its CA into the system store; -no-snapshot avoids stale state.
-  emulator -avd "$AVD" -writable-system -no-snapshot -no-audio >"/tmp/emulator-$AVD.log" 2>&1 &
+  "$SDK/emulator/emulator" -avd "$AVD" -writable-system -no-snapshot -no-audio >"/tmp/emulator-$AVD.log" 2>&1 &
   EMU=$!
   trap 'kill $EMU 2>/dev/null || true' EXIT
 fi
 
 echo "[*] Waiting for $MOBSF_ANALYZER_IDENTIFIER to boot"
-adb -s "$MOBSF_ANALYZER_IDENTIFIER" wait-for-device
+until adb -s "$MOBSF_ANALYZER_IDENTIFIER" get-state 2>/dev/null | grep -q device; do
+  if [ -n "${EMU:-}" ] && ! kill -0 "$EMU" 2>/dev/null; then
+    echo "Emulator exited early. Last log lines:" >&2
+    tail -n 15 "/tmp/emulator-$AVD.log" >&2
+    exit 1
+  fi
+  sleep 2
+done
 until [ "$(adb -s "$MOBSF_ANALYZER_IDENTIFIER" shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; do sleep 2; done
 
 echo "[*] Root + writable system"

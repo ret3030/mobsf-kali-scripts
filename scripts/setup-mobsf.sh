@@ -32,7 +32,13 @@ sudo apt install -y git curl unzip default-jre python3-dev python3-venv python3-
 echo "[*] MobSF"
 mkdir -p "$TOOLS"
 [ -d "$MOBSF_DIR/.git" ] || git clone https://github.com/MobSF/Mobile-Security-Framework-MobSF.git "$MOBSF_DIR"
-(cd "$MOBSF_DIR" && ./setup.sh)
+# MobSF's setup.sh runs clean.sh, which deletes ~/.MobSF (scan history, uploads, DB).
+# Run it only on a fresh install; update later with 'git pull', not by re-running setup.sh.
+if [ -f "$HOME/.MobSF/db.sqlite3" ]; then
+  echo "    ~/.MobSF already exists, skipping MobSF setup.sh so scan history is kept."
+else
+  (cd "$MOBSF_DIR" && ./setup.sh)
+fi
 
 if [ "$ARCH" != "x86_64" ]; then
   # Google ships no Linux arm64 emulator or platform-tools, so use apt adb and a remote emulator.

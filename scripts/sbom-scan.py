@@ -26,30 +26,55 @@ GROUP_BY_PREFIX = {
     "play-services-": "com.google.android.gms",
     "transport-": "com.google.android.datatransport",
 }
+# .version markers whose name uses '_' both as separator and inside the name, so the
+# group/artifact cannot be recovered by splitting. Map the known ones explicitly.
+VERSION_REMAP = {
+    "kotlinx_coroutines": "org.jetbrains.kotlinx",
+}
 SEV_RANK = {"CRITICAL": 4, "HIGH": 3, "MODERATE": 2, "MEDIUM": 2, "LOW": 1, "": 0}
 
 
+def resolve_version_marker(coord, version):
+    """Map a META-INF '<name>.version' marker to (group, artifact) or None if ambiguous.
+
+    Trustworthy only when the group is a real reverse-DNS group (contains a dot),
+    e.g. androidx.core_core -> androidx.core:core. Known underscore-named libraries
+    are remapped; anything else is returned as unresolved so coverage stays honest.
+    """
+    if "_" not in coord:
+        return None
+    group, artifact = coord.rsplit("_", 1)
+    if "." in group:
+        return (group, artifact, version)
+    for prefix, real_group in VERSION_REMAP.items():
+        if coord.startswith(prefix):
+            return (real_group, coord.replace("_", "-"), version)
+    return None
+
+
 def components_from_apk(apk_path):
-    """Return a sorted list of (group, artifact, version) found in the APK."""
+    """Return (resolved, unresolved): resolved is [(group,artifact,version)] with trusted
+    Maven coordinates; unresolved is [(marker, version)] that could not be mapped."""
     found = {}
+    unresolved = []
     with zipfile.ZipFile(apk_path) as z:
         names = z.namelist()
         for name in names:
             if name.startswith("META-INF/") and name.endswith(".version"):
                 coord = name[len("META-INF/"):-len(".version")]
-                if "_" not in coord:
-                    continue
-                group, artifact = coord.rsplit("_", 1)
                 version = z.read(name).decode("utf-8", "replace").strip()
-                if version:
-                    found[(group, artifact)] = version
+                if not version:
+                    continue
+                r = resolve_version_marker(coord, version)
+                if r:
+                    found[(r[0], r[1])] = r[2]
+                else:
+                    unresolved.append((coord, version))
         for name in names:
             if not name.endswith(".properties"):
                 continue
             text = z.read(name).decode("utf-8", "replace")
-            props = dict(
-                re.findall(r"^([\w.-]+)=(.*)$", text, re.M)
-            )
+            props = dict(re.findall(r"^([\w.-]+)=(.*)$", text, re.M))
             artifact = props.get("client")
             version = props.get("version")
             if not artifact or not version:
@@ -59,7 +84,8 @@ def components_from_apk(apk_path):
             )
             if group and (group, artifact) not in found:
                 found[(group, artifact)] = version
-    return sorted((g, a, v) for (g, a), v in found.items())
+    resolved = sorted((g, a, v) for (g, a), v in found.items())
+    return resolved, sorted(set(unresolved))
 
 
 def post_json(url, payload):
@@ -162,8 +188,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[*] Reading dependency markers from {apk.name}")
-    components = components_from_apk(apk)
-    print(f"[*] Found {len(components)} components")
+    components, unresolved = components_from_apk(apk)
+    print(f"[*] Found {len(components)} components with Maven coordinates"
+          f" ({len(unresolved)} markers unresolved, not checked)")
 
     print("[*] Querying OSV.dev for known vulnerabilities (live)")
     hits = query_osv(components)
@@ -193,6 +220,11 @@ def main():
             d = details[vid]
             cve = ", ".join(d["aliases"]) or d["id"]
             print(f"    {cve}  ({d['severity'] or 'n/a'})  {d['summary'][:90]}")
+    if unresolved:
+        print(f"\n--- {len(unresolved)} unresolved markers (no reliable Maven coordinate, "
+              "not checked against OSV) ---")
+        for marker, version in unresolved:
+            print(f"    {marker}  {version}")
     print("==================================================")
     print(f"CycloneDX SBOM: {sbom_file}")
 

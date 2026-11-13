@@ -114,12 +114,16 @@ MITM_PID=$!
 sleep 2
 
 # --- Install and launch the app under frida unpinning --------------------
+list_pkgs() { adb shell pm list packages -3 2>/dev/null | sed 's/package://' | tr -d '\r' | sort; }
+
 echo "[*] Installing APK"
+list_pkgs >"$OUT/pkgs-before.txt" || true
 adb install -r -g "$APK" >"$OUT/install.log" 2>&1 || { echo "Install failed:"; cat "$OUT/install.log"; exit 1; }
-AAPT="$(ls "$SDK"/build-tools/*/aapt 2>/dev/null | head -1)"
-PKG=""
-[ -n "$AAPT" ] && PKG="$("$AAPT" dump badging "$APK" 2>/dev/null | awk -F"'" '/^package: name=/{print $2; exit}')"
-[ -n "$PKG" ] || PKG="$(adb shell pm list packages -3 | sed 's/package://' | tr -d '\r' | tail -1)"
+# Derive the package name from what appeared after install (no aapt/build-tools needed).
+list_pkgs >"$OUT/pkgs-after.txt" || true
+PKG="$(comm -13 "$OUT/pkgs-before.txt" "$OUT/pkgs-after.txt" | head -1)"
+[ -n "$PKG" ] || PKG="$(tail -1 "$OUT/pkgs-after.txt")"
+[ -n "$PKG" ] || { echo "Could not determine package name"; exit 1; }
 echo "[*] Package: $PKG"
 
 echo "[*] Launching under frida SSL-unpinning (capturing ${CAPTURE}s)"

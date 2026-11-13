@@ -4,8 +4,8 @@
 set -uo pipefail
 
 SDK="$HOME/Android/Sdk"
-AVD="mobsf-api30"
-API=30
+AVD="mobsf-api28"
+API=28
 MOBSF_DIR="$HOME/tools/MobSF"
 SERIAL="${MOBSF_ANALYZER_IDENTIFIER:-emulator-5554}"
 ADB="$SDK/platform-tools/adb"

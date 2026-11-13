@@ -9,8 +9,8 @@ set -euo pipefail
 TOOLS="$HOME/tools"
 MOBSF_DIR="$TOOLS/MobSF"
 SDK="$HOME/Android/Sdk"
-AVD="mobsf-api30"
-API=30
+AVD="mobsf-api28"
+API=28
 # Pinned cmdline-tools build; bump it if Google removes the file.
 CMDLINE_TOOLS=11076708
 
@@ -83,6 +83,7 @@ fi
 SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
 yes | "$SDKM" --licenses >/dev/null || true
 # google_apis (not google_apis_playstore): the Play image has no adb root.
+# API 28: with emulator 37.x, Android 10/11 images boot-loop once verity is disabled, API 28 does not.
 "$SDKM" "platform-tools" "emulator" "platforms;android-$API" "system-images;android-$API;google_apis;x86_64"
 
 echo "[*] AVD $AVD"

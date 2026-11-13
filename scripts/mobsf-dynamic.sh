@@ -11,6 +11,14 @@ MOBSF_DIR="$HOME/tools/MobSF"
 PORT=8000
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
 
+# MobSF needs Python 3.12/3.13 but the distro default may be newer (Kali ships 3.14).
+# A private shim dir makes 'python3' resolve to a supported one for MobSF's setup.sh and run.sh only.
+PY="$(command -v python3.13 || command -v python3.12 || true)"
+if [ -n "$PY" ]; then
+  mkdir -p "$HOME/tools/pyshim" && ln -sf "$PY" "$HOME/tools/pyshim/python3"
+  export PATH="$HOME/tools/pyshim:$PATH"
+fi
+
 # Install whatever is missing, so this one script is all you ever run.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ ! -x "$SDK/platform-tools/adb" ] || [ ! -x "$SDK/emulator/emulator" ] \

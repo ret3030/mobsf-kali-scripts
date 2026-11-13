@@ -16,10 +16,18 @@ CMDLINE_TOOLS=11076708
 
 ARCH="$(uname -m)"
 
+# MobSF needs Python 3.12/3.13 but the distro default may be newer (Kali ships 3.14).
+# A private shim dir makes 'python3' resolve to a supported one for MobSF's setup.sh and run.sh only.
+PY="$(command -v python3.13 || command -v python3.12 || true)"
+if [ -n "$PY" ]; then
+  mkdir -p "$HOME/tools/pyshim" && ln -sf "$PY" "$HOME/tools/pyshim/python3"
+  export PATH="$HOME/tools/pyshim:$PATH"
+fi
+
 echo "[*] Python version (MobSF needs 3.12 or 3.13)"
 PYMINOR="$(python3 -c 'import sys; print(sys.version_info.minor)')"
 if [ "$PYMINOR" -lt 12 ] || [ "$PYMINOR" -gt 13 ]; then
-  echo "    python3 is 3.$PYMINOR. Install 3.12/3.13 (for example with uv: 'uv python install 3.13') and re-run."
+  echo "    no python3.12 or python3.13 found (python3 is 3.$PYMINOR). Install one, for example 'uv python install 3.13', and re-run."
   exit 1
 fi
 

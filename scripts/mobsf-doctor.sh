@@ -47,8 +47,11 @@ else
 fi
 
 echo "== Python and Java"
-pyminor="$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
-[ "$pyminor" -ge 12 ] && [ "$pyminor" -le 13 ] && ok "python3 3.$pyminor" || fail "python3 3.$pyminor: MobSF needs 3.12 or 3.13"
+if command -v python3.13 >/dev/null || command -v python3.12 >/dev/null; then
+  ok "$(command -v python3.13 || command -v python3.12) (used for MobSF; python3 itself is $(python3 -V 2>&1))"
+else
+  fail "no python3.12 or python3.13: MobSF needs one of them"
+fi
 command -v java >/dev/null && ok "java found" || fail "java missing: sudo apt install default-jre"
 
 echo "== MobSF install and data"

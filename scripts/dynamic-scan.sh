@@ -37,6 +37,20 @@ OUT="$HOME/mobsf-out/dyn-$(basename "$APK" .apk)-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
 adb() { "$A" -s "$SERIAL" "$@"; }
 
+# 'adb root' restarts adbd, so the connection drops for a moment right after boot. Retry until
+# the daemon is back as root instead of letting a transient "closed" abort the run.
+adb_root() {
+  for _ in $(seq 1 15); do
+    case "$(adb root 2>&1)" in
+      *"restarting adbd as root"*|*"already running as root"*)
+        adb wait-for-device; sleep 1
+        [ "$(adb shell id -u 2>/dev/null | tr -d '\r')" = 0 ] && return 0 ;;
+    esac
+    sleep 2
+  done
+  echo "Could not get root adb on the emulator"; return 1
+}
+
 # --- Preconditions -------------------------------------------------------
 [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "No /dev/kvm access, see mobsf-doctor.sh"; exit 1; }
 [ -n "$FRIDA_VER" ] || { echo "frida not found in MobSF poetry env"; exit 1; }
@@ -92,7 +106,7 @@ for _ in $(seq 1 60); do
   kill -0 "$EMU_PID" 2>/dev/null || { echo "Emulator died, see $OUT/emulator.log"; exit 1; }
   sleep 5
 done
-adb root >/dev/null; sleep 3
+adb_root
 echo "[*] Device up: API $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
 
 # --- Install proxy CA into the system store via tmpfs --------------------

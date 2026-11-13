@@ -35,7 +35,7 @@ CHECKS=(
   'setAllowContentAccess\(true\)|WARN|WebView can read content:// providers'
   'setSavePassword\(true\)|WARN|deprecated password saving enabled'
   'setJavaScriptCanOpenWindowsAutomatically\(true\)|WARN|page can open windows without user action'
-  'setAcceptThirdPartyCookies\([^)]*,[[:space:]]*true\)|INFO|third-party cookies accepted'
+  'setAcceptThirdPartyCookies\(.*,[[:space:]]*true\)|INFO|third-party cookies accepted'
   'setJavaScriptEnabled\(true\)|INFO|JavaScript enabled (often required, note it)'
   'setDomStorageEnabled\(true\)|INFO|DOM storage enabled'
 )

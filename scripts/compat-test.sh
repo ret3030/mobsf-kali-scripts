@@ -4,6 +4,8 @@
 # Per API level it boots a headless emulator, installs the APK, launches it, waits, and records
 # one of: INSTALL_FAIL, CRASH, NOT_RUNNING, RUNNING. One emulator at a time keeps RAM use low.
 # This is a functional smoke test, not a pentest: no root, no hooks, no proxy.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 [ "$#" -ge 2 ] || { echo "Usage: $0 <apk> <api> [<api> ...]"; exit 1; }

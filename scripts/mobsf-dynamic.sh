@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # mobsf-dynamic.sh: start the emulator in the state MobSF dynamic analysis needs, then MobSF.
 # Run after setup-mobsf.sh, as a normal user. Ctrl+C stops MobSF and the emulator.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 [ "$(id -u)" -ne 0 ] || { echo "Do not run as root."; exit 1; }

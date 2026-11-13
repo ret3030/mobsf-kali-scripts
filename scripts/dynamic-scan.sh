@@ -12,6 +12,8 @@
 #   scripts/dynamic-scan.sh app.apk interactive         opens the emulator window and mitmweb, then
 #                                                        waits while you log in and drive the app
 #                                                        (your phase 3); Ctrl+C to stop and summarize.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 [ "$(id -u)" -ne 0 ] || { echo "Run as a normal user, not root."; exit 1; }

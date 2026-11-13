@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # setup-kali.sh - install the Android pentest toolkit on Kali Linux.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 echo "[*] apt packages"

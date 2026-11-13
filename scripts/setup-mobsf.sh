@@ -2,6 +2,8 @@
 # setup-mobsf.sh: one-time install of MobSF (native) plus an Android emulator for dynamic analysis.
 # Run as a normal user, NOT with sudo. Only the apt step asks for sudo itself.
 # Everything lives in the home directory, so MobSF never needs root.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 [ "$(id -u)" -ne 0 ] || { echo "Run as a normal user, not root (root-owned files in ~ break MobSF)."; exit 1; }

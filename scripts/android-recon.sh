@@ -2,6 +2,8 @@
 # android-recon.sh - read-only static recon for an authorised Android pentest.
 # Usage: ./android-recon.sh target.apk
 # It decodes, decompiles, and scans the APK. It never modifies the artifact.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 APK="${1:?Usage: $0 <apk>}"

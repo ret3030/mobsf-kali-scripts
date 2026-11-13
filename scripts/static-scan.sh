@@ -3,6 +3,8 @@
 # Starts MobSF locally if it is not already running (no emulator needed). Run as a normal user.
 #
 # Usage: scripts/static-scan.sh path/to/app.apk
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 [ "$(id -u)" -ne 0 ] || { echo "Run as a normal user, not root."; exit 1; }

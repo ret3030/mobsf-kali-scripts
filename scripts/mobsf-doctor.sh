@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # mobsf-doctor.sh: read-only check that MobSF and the emulator are set up correctly.
 # Run as the same user that runs mobsf-dynamic.sh. Changes nothing.
+# Must be executed, not sourced: with set -e a sourced exit would close your shell.
+(return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -uo pipefail
 
 SDK="$HOME/Android/Sdk"

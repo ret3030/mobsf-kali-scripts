@@ -9,6 +9,7 @@ SDK="$HOME/Android/Sdk"
 AVD="mobsf-api30"
 MOBSF_DIR="$HOME/tools/MobSF"
 PORT=8000
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
 
 if [ -x "$SDK/platform-tools/adb" ]; then
   export PATH="$SDK/platform-tools:$SDK/emulator:$PATH"
@@ -33,24 +34,35 @@ if [ -x "$SDK/emulator/emulator" ]; then
   trap 'kill $EMU 2>/dev/null || true' EXIT
 fi
 
-echo "[*] Waiting for $MOBSF_ANALYZER_IDENTIFIER to boot"
-until adb -s "$MOBSF_ANALYZER_IDENTIFIER" get-state 2>/dev/null | grep -q device; do
-  if [ -n "${EMU:-}" ] && ! kill -0 "$EMU" 2>/dev/null; then
-    echo "Emulator exited early. Last log lines:" >&2
-    tail -n 15 "/tmp/emulator-$AVD.log" >&2
-    exit 1
-  fi
-  sleep 2
-done
-until [ "$(adb -s "$MOBSF_ANALYZER_IDENTIFIER" shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; do sleep 2; done
+# Cold boot takes 1-3 min with KVM and far longer without it, so print progress and give up eventually.
+wait_boot() {
+  local start=$SECONDS
+  until [ "$(adb -s "$MOBSF_ANALYZER_IDENTIFIER" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; do
+    if [ -n "${EMU:-}" ] && ! kill -0 "$EMU" 2>/dev/null; then
+      echo "Emulator exited early. Last log lines:" >&2
+      tail -n 15 "/tmp/emulator-$AVD.log" >&2
+      exit 1
+    fi
+    if [ $((SECONDS - start)) -ge "$BOOT_TIMEOUT" ]; then
+      echo "Not booted after ${BOOT_TIMEOUT}s (adb state: $(adb -s "$MOBSF_ANALYZER_IDENTIFIER" get-state 2>&1))." >&2
+      echo "Run mobsf-doctor.sh and check /tmp/emulator-$AVD.log" >&2
+      exit 1
+    fi
+    echo "    $((SECONDS - start))s, adb state: $(adb -s "$MOBSF_ANALYZER_IDENTIFIER" get-state 2>&1 | head -n1)"
+    sleep 10
+  done
+}
+
+echo "[*] Waiting for $MOBSF_ANALYZER_IDENTIFIER to boot (up to ${BOOT_TIMEOUT}s)"
+wait_boot
 
 echo "[*] Root + writable system"
 adb -s "$MOBSF_ANALYZER_IDENTIFIER" root >/dev/null
 if ! adb -s "$MOBSF_ANALYZER_IDENTIFIER" remount >/dev/null 2>&1; then
   adb -s "$MOBSF_ANALYZER_IDENTIFIER" disable-verity
   adb -s "$MOBSF_ANALYZER_IDENTIFIER" reboot
-  adb -s "$MOBSF_ANALYZER_IDENTIFIER" wait-for-device
-  until [ "$(adb -s "$MOBSF_ANALYZER_IDENTIFIER" shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; do sleep 2; done
+  sleep 15  # let it go down, or the old boot_completed=1 is read as the new boot
+  wait_boot
   adb -s "$MOBSF_ANALYZER_IDENTIFIER" root >/dev/null
   adb -s "$MOBSF_ANALYZER_IDENTIFIER" remount
 fi

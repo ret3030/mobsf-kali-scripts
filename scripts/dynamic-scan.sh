@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# dynamic-scan.sh: automated dynamic recon of an APK on a rooted API 30 emulator.
+# dynamic-scan.sh: dynamic recon of an APK on a rooted API 30 emulator.
 # Boots the emulator, installs a proxy CA via tmpfs (no writable /system needed), runs frida
-# SSL-unpinning, captures traffic with mitmproxy, exercises the app, then collects and summarizes:
+# SSL-unpinning, routes traffic through mitmproxy, then collects and summarizes:
 #   - cleartext HTTP and intercepted HTTPS
 #   - secrets left in app storage and logcat
 #   - exported component behaviour
 # This is recon, not proof: review every finding by hand. Run as a normal user.
 #
-# Usage: scripts/dynamic-scan.sh path/to/app.apk [capture_seconds]
+# Two modes:
+#   scripts/dynamic-scan.sh app.apk [capture_seconds]   automated: launch, light interaction, collect
+#   scripts/dynamic-scan.sh app.apk interactive         opens the emulator window and mitmweb, then
+#                                                        waits while you log in and drive the app
+#                                                        (your phase 3); Ctrl+C to stop and summarize.
 set -euo pipefail
 
 [ "$(id -u)" -ne 0 ] || { echo "Run as a normal user, not root."; exit 1; }
 APK="${1:-}"
-CAPTURE="${2:-90}"
-[ -n "$APK" ] && [ -f "$APK" ] || { echo "Usage: $0 path/to/app.apk [capture_seconds]"; exit 1; }
+MODE="auto"; CAPTURE="${2:-90}"
+[ "${2:-}" = "interactive" ] && MODE="interactive"
+[ -n "$APK" ] && [ -f "$APK" ] || { echo "Usage: $0 path/to/app.apk [capture_seconds|interactive]"; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SDK="$HOME/Android/Sdk"
@@ -66,17 +71,20 @@ CA_HASH="$(openssl x509 -inform PEM -subject_hash_old -in "$MITM_CA" | head -1)"
 cleanup() {
   echo "[*] Stopping"
   [ -n "${MITM_PID:-}" ] && kill "$MITM_PID" 2>/dev/null || true
+  [ -n "${WEB_PID:-}" ] && kill "$WEB_PID" 2>/dev/null || true
   [ -n "${EMU_PID:-}" ] && kill "$EMU_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
 
 # --- Boot emulator -------------------------------------------------------
-echo "[*] Booting $AVD"
+# Interactive mode shows the window so you can drive the app; automated mode runs headless.
+WINDOW=(-no-window); [ "$MODE" = interactive ] && WINDOW=()
+echo "[*] Booting $AVD ($MODE mode)"
 pkill -f "[q]emu-system" 2>/dev/null || true
 sleep 2
 "$A" kill-server 2>/dev/null || true
-setsid nohup "$E" -avd "$AVD" -no-snapshot -wipe-data -no-audio -no-window \
-  -gpu swiftshader_indirect -http-proxy "$HOST_FROM_GUEST:$PROXY_PORT" \
+setsid nohup "$E" -avd "$AVD" -no-snapshot -wipe-data -no-audio "${WINDOW[@]}" \
+  -gpu swiftshader_indirect \
   >"$OUT/emulator.log" 2>&1 </dev/null &
 EMU_PID=$!
 for _ in $(seq 1 60); do
@@ -105,13 +113,24 @@ adb shell chmod 755 /data/local/tmp/frida-server
 adb shell "setsid /data/local/tmp/frida-server >/dev/null 2>&1 &"
 sleep 3
 
-# --- Start proxy capture -------------------------------------------------
-echo "[*] Starting mitmproxy capture on :$PROXY_PORT"
-setsid nohup mitmdump --listen-host 0.0.0.0 -p "$PROXY_PORT" \
-  -w "$OUT/traffic.flows" --set console_eventlog_verbosity=info \
-  >"$OUT/traffic.log" 2>&1 </dev/null &
+# --- Start proxy capture and point the device at it ----------------------
+# A global proxy via settings is honoured by apps; the emulator -http-proxy flag is not.
+# Interactive mode uses mitmweb so you watch traffic live; both write the same flows file.
+if [ "$MODE" = interactive ]; then
+  echo "[*] Starting mitmweb on :$PROXY_PORT (live UI at http://127.0.0.1:8081)"
+  setsid nohup mitmweb --no-web-open-browser --web-host 127.0.0.1 --web-port 8081 \
+    --listen-host 0.0.0.0 -p "$PROXY_PORT" -w "$OUT/traffic.flows" \
+    >"$OUT/traffic.log" 2>&1 </dev/null &
+else
+  echo "[*] Starting mitmproxy capture on :$PROXY_PORT"
+  setsid nohup mitmdump --listen-host 0.0.0.0 -p "$PROXY_PORT" \
+    -w "$OUT/traffic.flows" --set console_eventlog_verbosity=info \
+    >"$OUT/traffic.log" 2>&1 </dev/null &
+fi
 MITM_PID=$!
 sleep 2
+adb shell settings put global http_proxy "$HOST_FROM_GUEST:$PROXY_PORT"
+echo "[*] Device proxy: $(adb shell settings get global http_proxy | tr -d '\r')"
 
 # --- Install and launch the app under frida unpinning --------------------
 list_pkgs() { adb shell pm list packages -3 2>/dev/null | sed 's/package://' | tr -d '\r' | sort; }
@@ -126,13 +145,27 @@ PKG="$(comm -13 "$OUT/pkgs-before.txt" "$OUT/pkgs-after.txt" | head -1)"
 [ -n "$PKG" ] || { echo "Could not determine package name"; exit 1; }
 echo "[*] Package: $PKG"
 
-echo "[*] Launching under frida SSL-unpinning (capturing ${CAPTURE}s)"
+echo "[*] Launching $PKG under frida SSL-unpinning"
 eval "$FRIDA frida -U -f '$PKG' -l '$HERE/frida-unpin.js' -o '$OUT/frida.log'" >/dev/null 2>&1 &
 FRIDA_PID=$!
-# Light automated interaction to drive network traffic and touch code paths.
-( sleep 10; adb shell monkey -p "$PKG" --throttle 400 -v 120 >"$OUT/monkey.log" 2>&1 || true ) &
-sleep "$CAPTURE"
+
+if [ "$MODE" = interactive ]; then
+  echo
+  echo "  >>> Emulator window is open. Log in and use the app (your phase 3)."
+  echo "  >>> Watch traffic live at http://127.0.0.1:8081"
+  echo "  >>> Press Ctrl+C here when done to stop and collect the summary."
+  trap 'STOP=1' INT
+  while [ -z "${STOP:-}" ]; do sleep 1; kill -0 "$FRIDA_PID" 2>/dev/null || break; done
+  trap - INT
+else
+  echo "[*] Capturing ${CAPTURE}s with light interaction"
+  # Gentle monkey: no system keys, so it drives the app without crashing it out.
+  ( sleep 8; adb shell monkey -p "$PKG" --pct-syskeys 0 --throttle 600 -v 40 \
+      >"$OUT/monkey.log" 2>&1 || true ) &
+  sleep "$CAPTURE"
+fi
 kill "$FRIDA_PID" 2>/dev/null || true
+adb shell settings delete global http_proxy 2>/dev/null || true
 
 # --- Collect artifacts ---------------------------------------------------
 echo "[*] Collecting logcat, app storage, screenshot"

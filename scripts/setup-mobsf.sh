@@ -84,6 +84,12 @@ CFG="$HOME/.android/avd/$AVD.avd/config.ini"
 sed -i '/^hw.ramSize/d;/^disk.dataPartition.size/d' "$CFG"
 printf 'hw.ramSize=4096\ndisk.dataPartition.size=8G\n' >> "$CFG"
 
+echo "[*] adb and emulator on PATH for new shells"
+PATH_LINE='export PATH="$HOME/Android/Sdk/platform-tools:$HOME/Android/Sdk/emulator:$PATH"'
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ -f "$rc" ] && ! grep -qF "$PATH_LINE" "$rc" && echo "$PATH_LINE" >> "$rc"
+done
+
 echo "[*] Avoid two adb servers fighting over the device"
 if dpkg -s adb >/dev/null 2>&1; then
   echo "    apt 'adb' is installed (from setup-kali.sh). The SDK adb is used by mobsf-dynamic.sh;"

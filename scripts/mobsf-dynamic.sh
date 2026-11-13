@@ -11,6 +11,14 @@ MOBSF_DIR="$HOME/tools/MobSF"
 PORT=8000
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
 
+# Install whatever is missing, so this one script is all you ever run.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -x "$SDK/platform-tools/adb" ] || [ ! -x "$SDK/emulator/emulator" ] \
+  || [ ! -f "$HOME/.android/avd/$AVD.avd/config.ini" ] || [ ! -d "$MOBSF_DIR/.git" ]; then
+  echo "[*] Something is missing, running setup-mobsf.sh first"
+  "$HERE/setup-mobsf.sh"
+fi
+
 if [ -x "$SDK/platform-tools/adb" ]; then
   export PATH="$SDK/platform-tools:$SDK/emulator:$PATH"
 fi

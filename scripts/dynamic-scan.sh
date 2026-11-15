@@ -12,6 +12,8 @@
 #   scripts/dynamic-scan.sh app.apk interactive         opens the emulator window and mitmweb, then
 #                                                        waits while you log in and drive the app
 #                                                        (your phase 3); Ctrl+C to stop and summarize.
+#   FRIDA=0 scripts/dynamic-scan.sh app.apk interactive  launch without frida: stabler clickthrough
+#                                                        (use if the app freezes/ANRs under frida)
 # Must be executed, not sourced: with set -e a sourced exit would close your shell.
 (return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
@@ -100,7 +102,7 @@ pkill -f "[q]emu-system" 2>/dev/null || true
 sleep 2
 "$A" kill-server 2>/dev/null || true
 setsid nohup "$E" -avd "$AVD" -no-snapshot -wipe-data -no-audio "${WINDOW[@]}" \
-  -gpu swiftshader_indirect \
+  -gpu swiftshader_indirect -cores 4 \
   >"$OUT/emulator.log" 2>&1 </dev/null &
 EMU_PID=$!
 for _ in $(seq 1 60); do
@@ -122,12 +124,14 @@ adb shell "mkdir -p /data/local/tmp/cacerts && cp /system/etc/security/cacerts/*
   chown root:root /system/etc/security/cacerts/* && \
   chcon u:object_r:system_security_cacerts_file:s0 /system/etc/security/cacerts/* 2>/dev/null; true"
 
-# --- Start frida-server --------------------------------------------------
-echo "[*] Starting frida-server"
-adb push "$FS" /data/local/tmp/frida-server >/dev/null
-adb shell chmod 755 /data/local/tmp/frida-server
-adb shell "setsid /data/local/tmp/frida-server >/dev/null 2>&1 &"
-sleep 3
+# --- Start frida-server (skip with FRIDA=0 for a stabler, less detectable clickthrough) ---
+if [ "${FRIDA:-1}" = 1 ]; then
+  echo "[*] Starting frida-server"
+  adb push "$FS" /data/local/tmp/frida-server >/dev/null
+  adb shell chmod 755 /data/local/tmp/frida-server
+  adb shell "setsid /data/local/tmp/frida-server >/dev/null 2>&1 &"
+  sleep 3
+fi
 
 # --- Start proxy capture and point the device at it ----------------------
 # A global proxy via settings is honoured by apps; the emulator -http-proxy flag is not.
@@ -175,9 +179,15 @@ PKG="$(comm -13 "$OUT/pkgs-before.txt" "$OUT/pkgs-after.txt" | head -1)"
 [ -n "$PKG" ] || { echo "Could not determine package name"; exit 1; }
 echo "[*] Package: $PKG"
 
-echo "[*] Launching $PKG under frida SSL-unpinning"
-eval "$FRIDA frida -U -f '$PKG' -l '$HERE/frida-unpin.js' -o '$OUT/frida.log'" >/dev/null 2>&1 &
-FRIDA_PID=$!
+if [ "${FRIDA:-1}" = 1 ]; then
+  echo "[*] Launching $PKG under frida SSL-unpinning"
+  eval "$FRIDA frida -U -f '$PKG' -l '$HERE/frida-unpin.js' -o '$OUT/frida.log'" >/dev/null 2>&1 &
+  FRIDA_PID=$!
+else
+  echo "[*] Launching $PKG without frida (FRIDA=0): stabler, but any pinned HTTPS stays hidden"
+  adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+  FRIDA_PID=""
+fi
 
 if [ "$MODE" = interactive ]; then
   echo
@@ -185,7 +195,7 @@ if [ "$MODE" = interactive ]; then
   echo "  >>> Watch traffic live at http://127.0.0.1:8081"
   echo "  >>> Press Ctrl+C here when done to stop and collect the summary."
   trap 'STOP=1' INT
-  while [ -z "${STOP:-}" ]; do sleep 1; kill -0 "$FRIDA_PID" 2>/dev/null || break; done
+  while [ -z "${STOP:-}" ]; do sleep 1; [ -n "$FRIDA_PID" ] && { kill -0 "$FRIDA_PID" 2>/dev/null || break; }; done
   trap - INT
 else
   echo "[*] Capturing ${CAPTURE}s with light interaction"
@@ -194,7 +204,7 @@ else
       >"$OUT/monkey.log" 2>&1 || true ) &
   sleep "$CAPTURE"
 fi
-kill "$FRIDA_PID" 2>/dev/null || true
+[ -n "$FRIDA_PID" ] && kill "$FRIDA_PID" 2>/dev/null || true
 adb shell settings delete global http_proxy 2>/dev/null || true
 
 # --- Collect artifacts ---------------------------------------------------

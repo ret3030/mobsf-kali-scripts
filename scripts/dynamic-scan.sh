@@ -116,6 +116,8 @@ cleanup() {
   [ -n "${MITM_PID:-}" ] && kill "$MITM_PID" 2>/dev/null || true
   [ -n "${WEB_PID:-}" ] && kill "$WEB_PID" 2>/dev/null || true
   [ -n "${EMU_PID:-}" ] && kill "$EMU_PID" 2>/dev/null || true
+  # setsid reparents qemu, so the wrapper PID above is not enough: kill the emulator by its AVD.
+  pkill -f "qemu-system.*-avd $AVD" 2>/dev/null || true
 }
 trap cleanup EXIT
 

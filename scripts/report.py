@@ -60,6 +60,31 @@ def read_flows(flows_path):
     return sorted(hosts), sorted(cleartext), app_secrets, fw
 
 
+def webview_findings(md5):
+    """Run webview-check.sh on the MobSF-cached APK and parse its output. One source of
+    truth for the WebView rules; returns [(sev, note, [file:line, ...])]."""
+    here = Path(__file__).resolve().parent
+    script = here / "webview-check.sh"
+    apk = Path.home() / ".MobSF" / "uploads" / md5 / f"{md5}.apk"
+    if not (script.exists() and apk.exists()):
+        return []
+    import subprocess
+    try:
+        out = subprocess.run(["bash", str(script), str(apk)],
+                             capture_output=True, text=True, timeout=300).stdout
+    except Exception:
+        return []
+    findings, cur = [], None
+    for line in out.splitlines():
+        m = re.match(r"\[(HIGH|WARN|INFO)\]\s+(.*)", line.strip())
+        if m:
+            cur = {"sev": m.group(1), "note": m.group(2), "locations": []}
+            findings.append(cur)
+        elif cur is not None and line.strip() and line.startswith("    "):
+            cur["locations"].append(line.strip())
+    return [f for f in findings if f["locations"]]
+
+
 def gather(match):
     """Collect facts from the latest outputs into one dict the renderers consume."""
     static = latest("", "report.json", match)
@@ -69,11 +94,15 @@ def gather(match):
         sys.exit("No scan outputs found under ~/mobsf-out (run the scan scripts first).")
 
     data = {"generated": time.strftime("%Y-%m-%d %H:%M"),
-            "app": None, "static": None, "sbom": None, "dynamic": None}
+            "app": None, "static": None, "webview": None, "sbom": None, "dynamic": None}
 
     if static:
         r = json.load(open(static / "report.json"))
         a = r.get("appsec", {})
+        if r.get("md5"):
+            wv = webview_findings(r["md5"])
+            if wv:
+                data["webview"] = wv
         data["app"] = {
             "name": f"{r.get('app_name')} {r.get('version_name','')}".strip(),
             "package": r.get("package_name"),
@@ -128,6 +157,12 @@ def render_markdown(d):
                 out.append(f"### {level.title()} ({len(items)})")
                 out += [f"- [{sec}] {title}" for sec, title in items]
                 out.append("")
+    if d["webview"]:
+        out.append("## WebView configuration\n")
+        for f in d["webview"]:
+            out.append(f"- **[{f['sev']}]** {f['note']}")
+            out += [f"    - `{loc}`" for loc in f["locations"]]
+        out.append("")
     if d["sbom"]:
         s = d["sbom"]
         out += ["## Dependencies (SBOM / OSV)\n",
@@ -148,7 +183,7 @@ def render_markdown(d):
 
 def _sev_class(sev):
     s = (sev or "").lower()
-    return "high" if s in ("high", "critical") else "warn" if s in ("warning", "moderate", "medium") else "info"
+    return "high" if s in ("high", "critical") else "warn" if s in ("warn", "warning", "moderate", "medium") else "info"
 
 
 def render_html(d):
@@ -180,6 +215,13 @@ def render_html(d):
             rows += [f"<li><span class=sec>{e(sec)}</span> {e(title)}</li>" for sec, title in items]
             rows.append("</ul>")
         rows.append("</section>")
+    if d["webview"]:
+        rows.append("<section><h2>WebView configuration</h2><ul>")
+        for f in d["webview"]:
+            locs = ", ".join(f"<code>{e(loc)}</code>" for loc in f["locations"])
+            rows.append(f"<li><span class='badge {_sev_class(f['sev'])}'>{e(f['sev'])}</span> "
+                        f"{e(f['note'])} — {locs}</li>")
+        rows.append("</ul></section>")
     if d["sbom"]:
         s = d["sbom"]
         rows.append(f"<section><h2>Dependencies (SBOM / OSV)</h2>"

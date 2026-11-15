@@ -221,7 +221,7 @@ fi
 if [ "$MODE" = interactive ]; then
   echo
   echo "  >>> Emulator window is open. Log in and use the app (your phase 3)."
-  echo "  >>> Watch traffic live at http://127.0.0.1:8081"
+  if [ "$BURP" = 1 ]; then echo "  >>> Watch traffic in Burp (Proxy > HTTP history), work it in Repeater"; else echo "  >>> Watch traffic live at http://127.0.0.1:8081"; fi
   echo "  >>> Press Ctrl+C here when done to stop and collect the summary."
   trap 'STOP=1' INT
   while [ -z "${STOP:-}" ]; do sleep 1; [ -n "$FRIDA_PID" ] && { kill -0 "$FRIDA_PID" 2>/dev/null || break; }; done

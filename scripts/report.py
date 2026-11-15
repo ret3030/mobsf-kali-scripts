@@ -30,7 +30,10 @@ def latest(prefix, must_contain, match):
 
 
 def read_flows(flows_path):
-    from mitmproxy.io import FlowReader
+    try:
+        from mitmproxy.io import FlowReader
+    except Exception:
+        return None  # mitmproxy unavailable; caller notes dynamic flows were skipped
     hosts, cleartext, app_secrets, fw = set(), set(), [], 0
     with open(flows_path, "rb") as fh:
         for flow in FlowReader(fh).stream():
@@ -129,11 +132,15 @@ def gather(match):
         data["sbom"] = {"components": len(s.get("components", [])), "vulns": vulns}
 
     if dyn:
-        hosts, cleartext, app_secrets, fw = read_flows(dyn / "traffic.flows")
+        parsed = read_flows(dyn / "traffic.flows")
         shot = dyn / "screen.png"
+        if parsed is None:
+            hosts, cleartext, app_secrets, fw = [], [], [], 0
+        else:
+            hosts, cleartext, app_secrets, fw = parsed
         data["dynamic"] = {
             "hosts": hosts, "cleartext": cleartext, "app_secrets": app_secrets,
-            "fw": fw, "evidence": str(dyn),
+            "fw": fw, "evidence": str(dyn), "parsed": parsed is not None,
             "screenshot": str(shot) if shot.exists() else None,
         }
     return data

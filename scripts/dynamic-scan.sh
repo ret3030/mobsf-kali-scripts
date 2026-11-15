@@ -14,15 +14,27 @@
 #                                                        (your phase 3); Ctrl+C to stop and summarize.
 #   FRIDA=0 scripts/dynamic-scan.sh app.apk interactive  launch without frida: stabler clickthrough
 #                                                        (use if the app freezes/ANRs under frida)
+#   scripts/dynamic-scan.sh app.apk interactive --burp    route through your Burp on :8080 instead of
+#                                                        mitmproxy (start Burp first; frida off by default)
 # Must be executed, not sourced: with set -e a sourced exit would close your shell.
 (return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
 
 [ "$(id -u)" -ne 0 ] || { echo "Run as a normal user, not root."; exit 1; }
-APK="${1:-}"
-MODE="auto"; CAPTURE="${2:-90}"
-[ "${2:-}" = "interactive" ] && MODE="interactive"
-[ -n "$APK" ] && [ -f "$APK" ] || { echo "Usage: $0 path/to/app.apk [capture_seconds|interactive]"; exit 1; }
+BURP=0; POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --burp) BURP=1 ;;
+    *) POSITIONAL+=("$arg") ;;
+  esac
+done
+APK="${POSITIONAL[0]:-}"
+MODE="auto"; CAPTURE="${POSITIONAL[1]:-90}"
+[ "${POSITIONAL[1]:-}" = "interactive" ] && MODE="interactive"
+[ -n "$APK" ] && [ -f "$APK" ] || { echo "Usage: $0 path/to/app.apk [capture_seconds|interactive] [--burp]"; exit 1; }
+# --burp: route through your Burp (on :8080) instead of mitmproxy. frida off by default then
+# (the app does not pin, so Burp's CA alone intercepts); override with FRIDA=1.
+if [ "$BURP" = 1 ]; then : "${FRIDA:=0}"; else : "${FRIDA:=1}"; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SDK="$HOME/Android/Sdk"
@@ -58,7 +70,12 @@ adb_root() {
 # --- Preconditions -------------------------------------------------------
 [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "No /dev/kvm access, see mobsf-doctor.sh"; exit 1; }
 [ -n "$FRIDA_VER" ] || { echo "frida not found in MobSF poetry env"; exit 1; }
-command -v mitmdump >/dev/null || { echo "mitmdump missing: sudo apt install mitmproxy"; exit 1; }
+if [ "$BURP" = 1 ]; then
+  curl -s -x "127.0.0.1:$PROXY_PORT" http://burp/cert -o /dev/null \
+    || { echo "Burp proxy not reachable on 127.0.0.1:$PROXY_PORT. Start Burp with a proxy listener on 0.0.0.0:$PROXY_PORT."; exit 1; }
+else
+  command -v mitmdump >/dev/null || { echo "mitmdump missing: sudo apt install mitmproxy"; exit 1; }
+fi
 
 # The API 30 AVD must exist (setup-mobsf.sh creates it; create it here if missing).
 if [ ! -f "$HOME/.android/avd/$AVD.avd/config.ini" ]; then
@@ -77,14 +94,22 @@ if [ ! -f "$FS" ]; then
   unxz -f "$FS.xz"
 fi
 
-# --- mitmproxy CA (generated on first run) -------------------------------
-MITM_CA="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
-if [ ! -f "$MITM_CA" ]; then
-  echo "[*] Generating mitmproxy CA"
-  timeout 5 mitmdump >/dev/null 2>&1 || true
+# --- Proxy CA to inject (Burp's or mitmproxy's) --------------------------
+if [ "$BURP" = 1 ]; then
+  echo "[*] Fetching Burp CA through its proxy"
+  curl -s -x "127.0.0.1:$PROXY_PORT" http://burp/cert -o "$OUT/burp-ca.der" \
+    && openssl x509 -inform DER -in "$OUT/burp-ca.der" -out "$OUT/burp-ca.pem" 2>/dev/null \
+    || { echo "Could not fetch/convert Burp CA from http://burp/cert"; exit 1; }
+  CA_PEM="$OUT/burp-ca.pem"
+else
+  CA_PEM="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
+  if [ ! -f "$CA_PEM" ]; then
+    echo "[*] Generating mitmproxy CA"
+    timeout 5 mitmdump >/dev/null 2>&1 || true
+  fi
+  [ -f "$CA_PEM" ] || { echo "mitmproxy CA not generated at $CA_PEM"; exit 1; }
 fi
-[ -f "$MITM_CA" ] || { echo "mitmproxy CA not generated at $MITM_CA"; exit 1; }
-CA_HASH="$(openssl x509 -inform PEM -subject_hash_old -in "$MITM_CA" | head -1)"
+CA_HASH="$(openssl x509 -inform PEM -subject_hash_old -in "$CA_PEM" | head -1)"
 
 cleanup() {
   echo "[*] Stopping"
@@ -114,8 +139,8 @@ adb_root
 echo "[*] Device up: API $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
 
 # --- Install proxy CA into the system store via tmpfs --------------------
-echo "[*] Installing mitmproxy CA (tmpfs over system cacerts)"
-adb push "$MITM_CA" "/data/local/tmp/$CA_HASH.0" >/dev/null
+echo "[*] Installing proxy CA (tmpfs over system cacerts)"
+adb push "$CA_PEM" "/data/local/tmp/$CA_HASH.0" >/dev/null
 adb shell "mkdir -p /data/local/tmp/cacerts && cp /system/etc/security/cacerts/* /data/local/tmp/cacerts/ 2>/dev/null; \
   cp /data/local/tmp/$CA_HASH.0 /data/local/tmp/cacerts/ && \
   mount -t tmpfs tmpfs /system/etc/security/cacerts && \
@@ -125,7 +150,7 @@ adb shell "mkdir -p /data/local/tmp/cacerts && cp /system/etc/security/cacerts/*
   chcon u:object_r:system_security_cacerts_file:s0 /system/etc/security/cacerts/* 2>/dev/null; true"
 
 # --- Start frida-server (skip with FRIDA=0 for a stabler, less detectable clickthrough) ---
-if [ "${FRIDA:-1}" = 1 ]; then
+if [ "$FRIDA" = 1 ]; then
   echo "[*] Starting frida-server"
   adb push "$FS" /data/local/tmp/frida-server >/dev/null
   adb shell chmod 755 /data/local/tmp/frida-server
@@ -136,18 +161,22 @@ fi
 # --- Start proxy capture and point the device at it ----------------------
 # A global proxy via settings is honoured by apps; the emulator -http-proxy flag is not.
 # Interactive mode uses mitmweb so you watch traffic live; both write the same flows file.
-if [ "$MODE" = interactive ]; then
+if [ "$BURP" = 1 ]; then
+  echo "[*] Using Burp as the proxy on :$PROXY_PORT (work the traffic in Burp)"
+  MITM_PID=""
+elif [ "$MODE" = interactive ]; then
   echo "[*] Starting mitmweb on :$PROXY_PORT (live UI at http://127.0.0.1:8081)"
   setsid nohup mitmweb --no-web-open-browser --web-host 127.0.0.1 --web-port 8081 \
     --listen-host 0.0.0.0 -p "$PROXY_PORT" -w "$OUT/traffic.flows" \
     >"$OUT/traffic.log" 2>&1 </dev/null &
+  MITM_PID=$!
 else
   echo "[*] Starting mitmproxy capture on :$PROXY_PORT"
   setsid nohup mitmdump --listen-host 0.0.0.0 -p "$PROXY_PORT" \
     -w "$OUT/traffic.flows" --set console_eventlog_verbosity=info \
     >"$OUT/traffic.log" 2>&1 </dev/null &
+  MITM_PID=$!
 fi
-MITM_PID=$!
 sleep 2
 # Wait for system_server to register the settings service
 for _ in $(seq 1 30); do
@@ -179,7 +208,7 @@ PKG="$(comm -13 "$OUT/pkgs-before.txt" "$OUT/pkgs-after.txt" | head -1)"
 [ -n "$PKG" ] || { echo "Could not determine package name"; exit 1; }
 echo "[*] Package: $PKG"
 
-if [ "${FRIDA:-1}" = 1 ]; then
+if [ "$FRIDA" = 1 ]; then
   echo "[*] Launching $PKG under frida SSL-unpinning"
   eval "$FRIDA frida -U -f '$PKG' -l '$HERE/frida-unpin.js' -o '$OUT/frida.log'" >/dev/null 2>&1 &
   FRIDA_PID=$!
@@ -218,8 +247,12 @@ echo
 echo "================ DYNAMIC RECON SUMMARY ================"
 SECRET_RE='password|passwd|pwd|token|secret|api[_-]?key|authorization|bearer|session|jwt|refresh'
 
-python3 "$HERE/flows-summary.py" "$OUT/traffic.flows" 2>/dev/null \
-  || echo "  (could not parse traffic.flows; open it with: mitmweb -r $OUT/traffic.flows)"
+if [ "$BURP" = 1 ]; then
+  echo "  (traffic captured in Burp, use its Proxy history, Repeater and Target tabs)"
+else
+  python3 "$HERE/flows-summary.py" "$OUT/traffic.flows" 2>/dev/null \
+    || echo "  (could not parse traffic.flows; open it with: mitmweb -r $OUT/traffic.flows)"
+fi
 
 echo
 echo "--- Possible secrets in logcat ---"
@@ -240,6 +273,6 @@ echo "--- Exported components (from dumpsys) ---"
 adb shell dumpsys package "$PKG" 2>/dev/null | grep -iE 'exported=true' | head -10 | sed 's/^/  /' || echo "  none or unavailable"
 echo "======================================================"
 echo "Artifacts : $OUT"
-echo "  traffic.flows  open with:  mitmweb -r $OUT/traffic.flows"
+[ "$BURP" = 1 ] || echo "  traffic.flows  open with:  mitmweb -r $OUT/traffic.flows"
 echo "  appdata.tar    extract and inspect shared_prefs / databases"
 echo "  logcat.txt  frida.log  monkey.log  screen.png"

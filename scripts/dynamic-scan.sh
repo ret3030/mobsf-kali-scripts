@@ -11,7 +11,8 @@
 #   scripts/dynamic-scan.sh app.apk interactive          emulator window + mitmweb, Ctrl+C to stop
 #   FRIDA=0 scripts/dynamic-scan.sh app.apk interactive  launch without frida
 #   scripts/dynamic-scan.sh app.apk interactive --burp   route through Burp on :8080 (frida off by default)
-#   GPU=swiftshader_indirect scripts/dynamic-scan.sh ... fallback if GPU=host (default) fails
+#   GPU=swiftshader_indirect scripts/dynamic-scan.sh ...  fallback if GPU=host (default) fails
+#   MOBSF_DIR=/path/to/MobSF scripts/dynamic-scan.sh ...  override where frida's poetry env lives
 # Must be executed, not sourced.
 (return 0 2>/dev/null) && { echo "Run it, don't source it:  bash $0 <args>" >&2; return 1; }
 set -euo pipefail
@@ -29,8 +30,7 @@ MODE="auto"; CAPTURE="${POSITIONAL[1]:-90}"
 [ "${POSITIONAL[1]:-}" = "interactive" ] && MODE="interactive"
 [ -n "$APK" ] && [ -f "$APK" ] || { echo "Usage: $0 path/to/app.apk [capture_seconds|interactive] [--burp]"; exit 1; }
 
-# FRIDA is the 0/1 switch. The command itself is FRIDA_CMD (they used to share a name,
-# which made the switch always evaluate to "off").
+# FRIDA is the 0/1 switch; the command to run the frida client is FRIDA_CMD (set below).
 if [ "$BURP" = 1 ]; then : "${FRIDA:=0}"; else : "${FRIDA:=1}"; fi
 : "${GPU:=host}"
 
@@ -44,7 +44,16 @@ PROXY_PORT=8080
 HOST_FROM_GUEST="10.0.2.2"
 A="$SDK/platform-tools/adb"
 E="$SDK/emulator/emulator"
-FRIDA_CMD="cd $HOME/tools/MobSF && python3 -m poetry run"
+
+# Run the frida client where it actually lives: prefer MobSF's poetry env, else a global frida.
+MOBSF_DIR="${MOBSF_DIR:-$HOME/tools/MobSF}"
+if [ -f "$MOBSF_DIR/pyproject.toml" ] && grep -q '\[tool\.poetry\]' "$MOBSF_DIR/pyproject.toml" 2>/dev/null; then
+  FRIDA_CMD="cd '$MOBSF_DIR' && python3 -m poetry run"
+elif command -v frida >/dev/null 2>&1; then
+  FRIDA_CMD=""   # global frida; "$FRIDA_CMD frida ..." collapses to "frida ..."
+else
+  FRIDA_CMD="__none__"
+fi
 
 OUT="$HOME/mobsf-out/dyn-$(basename "$APK" .apk)-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
@@ -64,12 +73,16 @@ adb_root() {
 
 # --- Preconditions -------------------------------------------------------
 [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "No /dev/kvm access, see mobsf-doctor.sh"; exit 1; }
-[ -f "$HERE/flows-summary.py" ] || echo "[!] Missing $HERE/flows-summary.py (summary of traffic will be skipped)"
+[ -f "$HERE/flows-summary.py" ] || echo "[!] Missing $HERE/flows-summary.py (traffic summary will be skipped)"
 if [ "$FRIDA" = 1 ]; then
   [ -f "$HERE/frida-unpin.js" ] || { echo "Missing $HERE/frida-unpin.js"; exit 1; }
+  [ "$FRIDA_CMD" != "__none__" ] || {
+    echo "No frida found: neither a poetry env in $MOBSF_DIR nor a global 'frida'.";
+    echo "Install it (pip install frida-tools), set MOBSF_DIR to a folder with [tool.poetry] pyproject.toml, or run with FRIDA=0.";
+    exit 1; }
   FRIDA_VER="$(bash -c "$FRIDA_CMD frida --version" 2>/dev/null | tr -d '\r')"
-  [ -n "$FRIDA_VER" ] || { echo "frida not found in MobSF poetry env"; exit 1; }
-  # frida-tools 12+ (frida 16+) resumes spawned apps by default and dropped --no-pause.
+  [ -n "$FRIDA_VER" ] || { echo "frida client runs but reports no version (check: $FRIDA_CMD frida --version)"; exit 1; }
+  # frida-tools 12+ resume spawned apps by default and dropped --no-pause; add it only if supported.
   FRIDA_EXTRA=""
   if bash -c "$FRIDA_CMD frida --help" 2>&1 | grep -q -- '--no-pause'; then
     FRIDA_EXTRA="--no-pause"
@@ -119,7 +132,6 @@ CA_HASH="$(openssl x509 -inform PEM -subject_hash_old -in "$CA_PEM" | head -1)"
 
 cleanup() {
   echo "[*] Stopping"
-  # frida runs in its own session/process group (setsid), kill the whole group incl. the tail
   [ -n "${FRIDA_PID:-}" ] && kill -- "-$FRIDA_PID" 2>/dev/null || true
   [ -n "${MITM_PID:-}" ] && kill "$MITM_PID" 2>/dev/null || true
   [ -n "${EMU_PID:-}" ] && kill "$EMU_PID" 2>/dev/null || true
@@ -194,8 +206,8 @@ else
   MITM_PID=$!
 fi
 
-# Make sure the proxy actually listens before the app (and the device proxy setting) use it,
-# otherwise the app hangs on network timeouts and looks frozen.
+# Make sure the proxy actually listens before the app uses it, otherwise the app hangs on
+# network timeouts and looks frozen.
 echo "[*] Waiting for proxy on :$PROXY_PORT"
 PROXY_UP=0
 for _ in $(seq 1 20); do
@@ -230,7 +242,7 @@ FRIDA_PID=""
 if [ "$FRIDA" = 1 ]; then
   echo "[*] Launching $PKG under frida SSL-unpinning"
   # frida -f opens a REPL: keep stdin open (tail) so it does not exit in the background.
-  # Own session (setsid) so cleanup can kill frida and tail together. Errors go to frida.stderr.
+  # Own session (setsid) so cleanup kills frida and tail together. Errors go to frida.stderr.
   setsid bash -c "tail -f /dev/null | $FRIDA_CMD frida -U -f '$PKG' -l '$HERE/frida-unpin.js' $FRIDA_EXTRA -o '$OUT/frida.log'" \
     >"$OUT/frida.stderr" 2>&1 </dev/null &
   FRIDA_PID=$!
@@ -238,7 +250,7 @@ if [ "$FRIDA" = 1 ]; then
   if grep -q "frida-unpin\] installed" "$OUT/frida.log" 2>/dev/null; then
     echo "[*] $(grep -a 'frida-unpin\] installed' "$OUT/frida.log" | head -1)"
   else
-    echo "[!] frida script did not report in $OUT/frida.log yet, check $OUT/frida.stderr"
+    echo "[!] frida script has not reported yet; check $OUT/frida.stderr and $OUT/frida.log"
   fi
 else
   echo "[*] Launching $PKG without frida (FRIDA=0): any pinned HTTPS stays hidden"
@@ -254,7 +266,8 @@ if [ "$MODE" = interactive ]; then
   while [ -z "${STOP:-}" ]; do
     sleep 1 || true
     if [ -n "$FRIDA_PID" ] && ! kill -0 "$FRIDA_PID" 2>/dev/null; then
-      echo "[!] frida exited, see $OUT/frida.stderr"; break
+      echo "[!] frida exited, see $OUT/frida.stderr (continuing without unpinning; app traffic may still be captured if it does not pin)"
+      FRIDA_PID=""
     fi
   done
   trap - INT
@@ -281,9 +294,11 @@ SECRET_RE='password|passwd|pwd|token|secret|api[_-]?key|authorization|bearer|ses
 
 if [ "$BURP" = 1 ]; then
   echo "  (traffic captured in Burp, use its Proxy history, Repeater and Target tabs)"
-else
+elif [ -f "$HERE/flows-summary.py" ]; then
   python3 "$HERE/flows-summary.py" "$OUT/traffic.flows" 2>/dev/null \
     || echo "  (could not parse traffic.flows; open it with: mitmweb -r $OUT/traffic.flows)"
+else
+  echo "  (flows-summary.py not found; open traffic with: mitmweb -r $OUT/traffic.flows)"
 fi
 
 echo

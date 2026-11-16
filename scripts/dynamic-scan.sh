@@ -30,7 +30,6 @@ MODE="auto"; CAPTURE="${POSITIONAL[1]:-90}"
 [ "${POSITIONAL[1]:-}" = "interactive" ] && MODE="interactive"
 [ -n "$APK" ] && [ -f "$APK" ] || { echo "Usage: $0 path/to/app.apk [capture_seconds|interactive] [--burp]"; exit 1; }
 
-# FRIDA is the 0/1 switch; the command to run the frida client is FRIDA_CMD (set below).
 if [ "$BURP" = 1 ]; then : "${FRIDA:=0}"; else : "${FRIDA:=1}"; fi
 : "${GPU:=host}"
 
@@ -44,20 +43,35 @@ PROXY_PORT=8080
 HOST_FROM_GUEST="10.0.2.2"
 A="$SDK/platform-tools/adb"
 E="$SDK/emulator/emulator"
-
-# Run the frida client where it actually lives: prefer MobSF's poetry env, else a global frida.
 MOBSF_DIR="${MOBSF_DIR:-$HOME/tools/MobSF}"
-if [ -f "$MOBSF_DIR/pyproject.toml" ] && grep -q '\[tool\.poetry\]' "$MOBSF_DIR/pyproject.toml" 2>/dev/null; then
-  FRIDA_CMD="cd '$MOBSF_DIR' && python3 -m poetry run"
-elif command -v frida >/dev/null 2>&1; then
-  FRIDA_CMD=""   # global frida; "$FRIDA_CMD frida ..." collapses to "frida ..."
-else
-  FRIDA_CMD="__none__"
-fi
 
 OUT="$HOME/mobsf-out/dyn-$(basename "$APK" .apk)-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
 adb() { "$A" -s "$SERIAL" "$@"; }
+
+# frida() runs the frida client the right way, from anywhere, no fragile "cd && ..." in pipelines.
+# Prefer MobSF's poetry env (poetry -C points at the project, so the working dir does not matter),
+# else a global frida on PATH. frida_mode is resolved once below.
+frida_mode=""
+resolve_frida() {
+  if [ -f "$MOBSF_DIR/pyproject.toml" ] && grep -q '\[tool\.poetry\]' "$MOBSF_DIR/pyproject.toml" 2>/dev/null; then
+    frida_mode="poetry"
+  elif command -v frida >/dev/null 2>&1; then
+    frida_mode="global"
+  else
+    frida_mode="none"
+  fi
+}
+# Run a frida-family binary ($1 = frida | frida-ps | ...), passing the rest of the args through.
+frida() {
+  local bin="$1"; shift
+  case "$frida_mode" in
+    poetry) python3 -m poetry -C "$MOBSF_DIR" run "$bin" "$@" ;;
+    global) "$bin" "$@" ;;
+    *) return 127 ;;
+  esac
+}
+export -f frida adb 2>/dev/null || true
 
 adb_root() {
   for _ in $(seq 1 15); do
@@ -76,21 +90,20 @@ adb_root() {
 [ -f "$HERE/flows-summary.py" ] || echo "[!] Missing $HERE/flows-summary.py (traffic summary will be skipped)"
 if [ "$FRIDA" = 1 ]; then
   [ -f "$HERE/frida-unpin.js" ] || { echo "Missing $HERE/frida-unpin.js"; exit 1; }
-  [ "$FRIDA_CMD" != "__none__" ] || {
-    echo "No frida found: neither a poetry env in $MOBSF_DIR nor a global 'frida'.";
-    echo "Install it (pip install frida-tools), set MOBSF_DIR to a folder with [tool.poetry] pyproject.toml, or run with FRIDA=0.";
+  resolve_frida
+  [ "$frida_mode" != none ] || {
+    echo "No frida found: neither a [tool.poetry] pyproject in $MOBSF_DIR nor a global 'frida' on PATH.";
+    echo "Install it (pip install frida-tools), set MOBSF_DIR, or run with FRIDA=0.";
     exit 1; }
-  FRIDA_VER="$(bash -c "$FRIDA_CMD frida --version" 2>/dev/null | tr -d '\r')"
-  [ -n "$FRIDA_VER" ] || { echo "frida client runs but reports no version (check: $FRIDA_CMD frida --version)"; exit 1; }
-  # frida-tools 12+ resume spawned apps by default and dropped --no-pause; add it only if supported.
+  FRIDA_VER="$(frida frida --version 2>/dev/null | tr -d '\r')"
+  [ -n "$FRIDA_VER" ] || { echo "frida client found ($frida_mode) but reports no version. Try: $([ "$frida_mode" = poetry ] && echo "python3 -m poetry -C '$MOBSF_DIR' run ")frida --version"; exit 1; }
+  echo "[*] frida client: $FRIDA_VER ($frida_mode)"
   FRIDA_EXTRA=""
-  if bash -c "$FRIDA_CMD frida --help" 2>&1 | grep -q -- '--no-pause'; then
-    FRIDA_EXTRA="--no-pause"
-  fi
+  if frida frida --help 2>&1 | grep -q -- '--no-pause'; then FRIDA_EXTRA="--no-pause"; fi
 fi
 if [ "$BURP" = 1 ]; then
   curl -s -x "127.0.0.1:$PROXY_PORT" http://burp/cert -o /dev/null \
-    || { echo "Burp proxy not reachable on 127.0.0.1:$PROXY_PORT. Start Burp with a proxy listener on 0.0.0.0:$PROXY_PORT."; exit 1; }
+    || { echo "Burp proxy not reachable on 127.0.0.1:$PROXY_PORT. Start Burp with a listener on 0.0.0.0:$PROXY_PORT."; exit 1; }
 else
   command -v mitmdump >/dev/null || { echo "mitmdump missing: sudo apt install mitmproxy"; exit 1; }
 fi
@@ -206,8 +219,6 @@ else
   MITM_PID=$!
 fi
 
-# Make sure the proxy actually listens before the app uses it, otherwise the app hangs on
-# network timeouts and looks frozen.
 echo "[*] Waiting for proxy on :$PROXY_PORT"
 PROXY_UP=0
 for _ in $(seq 1 20); do
@@ -241,9 +252,15 @@ echo "[*] Package: $PKG"
 FRIDA_PID=""
 if [ "$FRIDA" = 1 ]; then
   echo "[*] Launching $PKG under frida SSL-unpinning"
-  # frida -f opens a REPL: keep stdin open (tail) so it does not exit in the background.
+  # frida -f opens a REPL; keep stdin open (tail) so it does not exit in the background.
   # Own session (setsid) so cleanup kills frida and tail together. Errors go to frida.stderr.
-  setsid bash -c "tail -f /dev/null | $FRIDA_CMD frida -U -f '$PKG' -l '$HERE/frida-unpin.js' $FRIDA_EXTRA -o '$OUT/frida.log'" \
+  # frida_run_cmd builds the exact client invocation for the resolved mode.
+  if [ "$frida_mode" = poetry ]; then
+    frida_run_cmd="python3 -m poetry -C '$MOBSF_DIR' run frida"
+  else
+    frida_run_cmd="frida"
+  fi
+  setsid bash -c "tail -f /dev/null | $frida_run_cmd -U -f '$PKG' -l '$HERE/frida-unpin.js' $FRIDA_EXTRA -o '$OUT/frida.log'" \
     >"$OUT/frida.stderr" 2>&1 </dev/null &
   FRIDA_PID=$!
   sleep 8
@@ -266,7 +283,7 @@ if [ "$MODE" = interactive ]; then
   while [ -z "${STOP:-}" ]; do
     sleep 1 || true
     if [ -n "$FRIDA_PID" ] && ! kill -0 "$FRIDA_PID" 2>/dev/null; then
-      echo "[!] frida exited, see $OUT/frida.stderr (continuing without unpinning; app traffic may still be captured if it does not pin)"
+      echo "[!] frida exited, see $OUT/frida.stderr (continuing without unpinning; non-pinned traffic is still captured)"
       FRIDA_PID=""
     fi
   done
